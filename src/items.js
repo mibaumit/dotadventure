@@ -40,9 +40,9 @@ export const ITEMS = {
 
   frost: {
     id: 'frost',
-    name: 'Frost Nova',
-    shape: 'triangle',
-    color: 0x7fe3ff,
+    name: 'Scroll of Frozen Orb',
+    shape: 'scroll',
+    color: 0x7fe3ff, // blue
     use(scene) {
       const p = scene.player;
       scene.blastEffect(p.x, p.y, 150, this.color);

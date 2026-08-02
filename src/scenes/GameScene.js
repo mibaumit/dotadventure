@@ -67,6 +67,25 @@ export class GameScene extends Phaser.Scene {
     makeShapeTexture(this, 'dot', 'circle', size);
     makeShapeTexture(this, shapeTextureKey('square'), 'square', size);
     makeShapeTexture(this, 'fist', 'circle', Math.round(UNIT.radius * 0.8)); // little punch
+
+    // Scroll of Frozen Orb: parchment scroll with a blue orb (multi-colour, so
+    // baked here before the shape loop — which then skips it since it exists).
+    if (!this.textures.exists('item_scroll')) {
+      const S = 20;
+      const roll = 3;
+      const inset = 3;
+      const sg = this.make.graphics({ x: 0, y: 0, add: false });
+      sg.fillStyle(0xe6d6a8, 1); // parchment body
+      sg.fillRect(inset, roll, S - inset * 2, S - roll * 2);
+      sg.fillStyle(0xc9b06e, 1); // rolls top & bottom
+      sg.fillRect(0, 0, S, roll);
+      sg.fillRect(0, S - roll, S, roll);
+      sg.fillStyle(0x4db8ff, 1); // blue orb
+      sg.fillCircle(S / 2, S / 2, 4);
+      sg.generateTexture('item_scroll', S, S);
+      sg.destroy();
+    }
+
     for (const shape of ITEM_SHAPES) {
       makeShapeTexture(this, `item_${shape}`, shape, 20); // item pickup icons
     }
@@ -264,32 +283,62 @@ export class GameScene extends Phaser.Scene {
       const tx = randInt(rng, room.x, room.x + room.w - 1);
       const ty = randInt(rng, room.y, room.y + room.h - 1);
       const id = ITEM_IDS[randInt(rng, 0, ITEM_IDS.length - 1)];
-      const item = getItem(id);
-
-      const pickup = this.physics.add.sprite((tx + 0.5) * TILE, (ty + 0.5) * TILE, `item_${item.shape}`);
-      pickup.setTint(item.color).setDepth(0);
-      pickup.itemId = id;
-      this.tweens.add({
-        targets: pickup,
-        y: pickup.y - 4,
-        duration: 700,
-        yoyo: true,
-        repeat: -1,
-        ease: 'Sine.easeInOut',
-      });
-      this.pickups.add(pickup);
+      this.createPickup((tx + 0.5) * TILE, (ty + 0.5) * TILE, id);
     }
 
     this.physics.add.overlap(this.player, this.pickups, (_p, pickup) => this.collectItem(pickup));
   }
 
-  /** Add a picked-up item to the action bar (stacking by id). */
+  /** Create a floating item pickup on the ground (from a room or a monster drop). */
+  createPickup(x, y, id) {
+    const item = getItem(id);
+    const pickup = this.physics.add.sprite(x, y, `item_${item.shape}`).setDepth(0);
+    if (item.shape !== 'scroll') pickup.setTint(item.color); // scroll art is multi-colour
+    pickup.itemId = id;
+    this.tweens.add({
+      targets: pickup,
+      y: y - 4,
+      duration: 700,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut',
+    });
+    this.pickups.add(pickup);
+    return pickup;
+  }
+
+  /** Add a picked-up item to the action bar (stacking by id); announce it. */
   collectItem(pickup) {
     const id = pickup.itemId;
-    pickup.destroy();
     const slot = this.hotbar.find((s) => s.id === id);
     if (slot) slot.count += 1;
     else if (this.hotbar.length < 9) this.hotbar.push({ id, count: 1 });
+    else return; // bar full — leave it on the ground
+    pickup.destroy();
+    const item = getItem(id);
+    this.showPickupText(item.name, hexColor(item.color));
+  }
+
+  /** A big item name that floats up and fades, center-screen, on pickup. */
+  showPickupText(name, color) {
+    const label = this.add
+      .text(this.scale.width / 2, this.scale.height * 0.34, name, {
+        fontFamily: 'monospace',
+        fontSize: '22px',
+        color,
+        fontStyle: 'bold',
+      })
+      .setOrigin(0.5)
+      .setScrollFactor(0)
+      .setDepth(200);
+    this.tweens.add({
+      targets: label,
+      y: label.y - 26,
+      alpha: 0,
+      duration: 1600,
+      ease: 'Quad.easeOut',
+      onComplete: () => label.destroy(),
+    });
   }
 
   /** Use the item in action-bar slot `i` (0-based), if any. */
@@ -656,6 +705,19 @@ export class GameScene extends Phaser.Scene {
         ],
         true
       );
+    } else if (shape === 'scroll') {
+      // Parchment scroll with a blue orb (ignores `color`).
+      const roll = size * 0.16;
+      const inset = size * 0.14;
+      const x0 = cx - h;
+      const y0 = cy - h;
+      g.fillStyle(0xe6d6a8, 1);
+      g.fillRect(x0 + inset, y0 + roll, size - inset * 2, size - roll * 2);
+      g.fillStyle(0xc9b06e, 1);
+      g.fillRect(x0, y0, size, roll);
+      g.fillRect(x0, y0 + size - roll, size, roll);
+      g.fillStyle(0x4db8ff, 1);
+      g.fillCircle(cx, cy, size * 0.2);
     }
   }
 
@@ -1217,7 +1279,10 @@ export class GameScene extends Phaser.Scene {
       this.showDamageNumber(tx, ty, `${Math.round(amount)}`, hexColor(COLORS.player));
     }
     if (killed) {
-      if (target.faction === 'enemy') this.grantXp(target.level);
+      if (target.faction === 'enemy') {
+        this.grantXp(target.level);
+        if (Math.random() < 0.18) this.createPickup(tx, ty, 'frost'); // random scroll drop
+      }
     } else {
       this.flashHit(target);
     }
