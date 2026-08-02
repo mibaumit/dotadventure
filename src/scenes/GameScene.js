@@ -10,6 +10,9 @@
 
 import { TILE, COLORS, UNIT, GAME } from '../config.js';
 import { generateLevel, WALL, roomCenterTile } from '../levelgen.js';
+import { makeShapeTexture, shapeTextureKey } from '../shapes.js';
+import { makeRng, randInt } from '../util.js';
+import { Enemy } from '../entities/Enemy.js';
 
 export class GameScene extends Phaser.Scene {
   constructor() {
@@ -26,6 +29,7 @@ export class GameScene extends Phaser.Scene {
     this.buildTextures();
     this.buildLevel();
     this.spawnPlayer();
+    this.spawnEnemies();
     this.setupCamera();
     this.setupInput();
     this.buildHud();
@@ -35,9 +39,11 @@ export class GameScene extends Phaser.Scene {
   // Setup
   // --------------------------------------------------------------------------
 
-  /** Generate small reusable textures (a filled circle) at runtime — no assets. */
+  /** Bake reusable shape textures at runtime — no external assets needed. */
   buildTextures() {
-    makeCircleTexture(this, 'dot', UNIT.radius);
+    const size = UNIT.radius * 2; // enemies match the dot's footprint
+    makeShapeTexture(this, 'dot', 'circle', size);
+    makeShapeTexture(this, shapeTextureKey('square'), 'square', size);
   }
 
   /** Generate the dungeon and render floor + collidable walls. */
@@ -89,6 +95,32 @@ export class GameScene extends Phaser.Scene {
     this.player.setDepth(1);
 
     this.physics.add.collider(this.player, this.walls);
+  }
+
+  /**
+   * Populate every room EXCEPT the start room with a random set of enemies.
+   * Deterministic per level so a given depth/seed always spawns the same fight.
+   */
+  spawnEnemies() {
+    this.enemies = this.physics.add.group();
+    const rng = makeRng(this.seed + this.depth * 7919);
+
+    // rooms[0] is the player's start room — leave it clear.
+    for (let i = 1; i < this.level.rooms.length; i++) {
+      const room = this.level.rooms[i];
+      const count = randInt(rng, 1, 2 + this.depth); // more enemies deeper down
+      for (let n = 0; n < count; n++) {
+        const tx = randInt(rng, room.x, room.x + room.w - 1);
+        const ty = randInt(rng, room.y, room.y + room.h - 1);
+        const enemy = new Enemy(this, (tx + 0.5) * TILE, (ty + 0.5) * TILE, {
+          shape: 'square',
+        });
+        this.enemies.add(enemy);
+      }
+    }
+
+    this.physics.add.collider(this.enemies, this.walls);
+    this.physics.add.collider(this.player, this.enemies);
   }
 
   setupCamera() {
@@ -149,7 +181,7 @@ export class GameScene extends Phaser.Scene {
   updateHud() {
     this.hudText.setText(
       `Depth ${this.depth}   Rooms ${this.level.rooms.length}   ` +
-        `Pos ${Math.round(this.player.x)}, ${Math.round(this.player.y)}`
+        `Enemies ${this.enemies.countActive(true)}`
     );
   }
 }
@@ -157,16 +189,6 @@ export class GameScene extends Phaser.Scene {
 // ============================================================================
 // Local helpers (module-private)
 // ============================================================================
-
-/** Draw a filled white circle and bake it into a reusable texture. */
-function makeCircleTexture(scene, key, radius) {
-  if (scene.textures.exists(key)) return;
-  const g = scene.make.graphics({ x: 0, y: 0, add: false });
-  g.fillStyle(0xffffff, 1);
-  g.fillCircle(radius, radius, radius);
-  g.generateTexture(key, radius * 2, radius * 2);
-  g.destroy();
-}
 
 /**
  * Greedy-merge horizontal runs of wall tiles into strips, so we create a
