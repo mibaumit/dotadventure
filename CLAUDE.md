@@ -48,8 +48,13 @@ DotAdventure/
 ├─ index.html              # loads Phaser (CDN) + src/main.js
 ├─ CLAUDE.md               # this file
 ├─ README.md              # player-facing: how to run + controls
+├─ serve.py                # no-cache dev server (python serve.py → :8080)
+├─ docs/specs/             # FEATURE SPECS — keep in sync with the code (see below)
 ├─ .claude/launch.json    # dev-server config for the preview tool
 └─ src/
+   ├─ items.js            # item/spell registry (potion, bomb, frozen-orb scroll)
+   ├─ shapes.js           # runtime shape→texture baking
+   ├─ sound.js            # procedural audio (music + SFX)
    ├─ main.js             # Phaser game config + boot (entry point)
    ├─ config.js           # ALL tunable numbers & colors (single source of truth)
    ├─ util.js             # tiny helpers: vectors, math, seeded RNG
@@ -78,6 +83,22 @@ DotAdventure/
 - **Level** — a tile grid (`0` = wall, `1` = floor) plus a list of rooms, from `levelgen.js`.
 
 ---
+
+## Specs — keep them in sync with the code (IMPORTANT)
+
+The feature specification lives in **`docs/specs/`** (see
+[`docs/specs/README.md`](docs/specs/README.md)):
+
+- `gameplay.md`, `world.md`, `entities.md`, `items.md`, `presentation.md` —
+  what's **built**, with the real numbers.
+- `planned.md` — what's **requested but not yet built**.
+
+**Whenever you create or change a feature, update the matching spec in the same
+change** — add/adjust the relevant section, move items from `planned.md` to the
+implemented docs as they ship, and keep numbers accurate to `config.js`. Treat
+the spec as part of "done": a feature isn't finished until its spec reflects it.
+The specs describe *behavior*; `config.js` remains the single source of truth
+for exact values (specs reference them, don't duplicate the authority).
 
 ## Coding conventions (keep it clean)
 
