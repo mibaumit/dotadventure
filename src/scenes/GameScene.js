@@ -116,6 +116,7 @@ export class GameScene extends Phaser.Scene {
     this.player.moveTarget = null; // click-to-move destination, or null
     this.player.focusEnemy = null; // clicked enemy to chase & auto-attack, or null
     this.player.punchToggle = false; // alternates which side-fist punches
+    this.player.wigPhase = 0; // fist-wiggle phase offset (see updateFistsFor)
     this.player.facing = -Math.PI / 2; // last-moved direction (starts facing up)
     this.player.takeDamage = (amount) => this.damagePlayer(amount);
     // On each attack, thrust one of the character's side-fists at the target.
@@ -372,12 +373,17 @@ export class GameScene extends Phaser.Scene {
     if (!this.frozen && !this.player.dead) {
       this.gameTime += delta; // timer only advances during un-frozen play
       this.movePlayer();
-      this.updateFists(time);
+      this.updateFistsFor(this.player, time, UNIT.radius);
       this.updatePlayerCombat(delta);
       this.checkDescend();
     }
     if (!this.frozen && !this.player.dead) this.updateEnemies(delta);
-    if (!this.frozen) this.separateEnemies();
+    if (!this.frozen) {
+      this.separateEnemies();
+      for (const e of this.enemies.getChildren()) {
+        if (e.active) this.updateFistsFor(e, time, ENEMY.radius);
+      }
+    }
 
     this.drawOverlays();
     this.updateXpUi();
@@ -436,40 +442,40 @@ export class GameScene extends Phaser.Scene {
   }
 
   /**
-   * Position the two side-fists each frame. While boxing an enemy the fists are
-   * held up toward that enemy (they stay on its side between punches); otherwise
-   * they ride on the character's left/right and wiggle as it moves.
-   * A fist that's mid-punch is driven by its tween, so we leave it alone.
+   * Position an owner's two side-fists each frame (works for the player AND
+   * enemies). While it has an active attackTarget the fists are held up toward
+   * that target (staying on its side between punches); otherwise they ride on
+   * the owner's left/right and wiggle as it moves. A fist that's mid-punch is
+   * driven by its tween, so we leave it alone.
    */
-  updateFists(time) {
-    const p = this.player;
-    const v = p.body.velocity;
+  updateFistsFor(owner, time, radius) {
+    const v = owner.body.velocity;
     const moving = Math.hypot(v.x, v.y) > 5;
-    if (moving) p.facing = Math.atan2(v.y, v.x); // face where we're heading
+    if (moving) owner.facing = Math.atan2(v.y, v.x); // face where we're heading
 
-    const lateral = UNIT.radius + 4;
+    const lateral = radius + 4;
 
-    if (p.attackTarget && p.attackTarget.active) {
-      // Guard: both fists flank the direction of the enemy, on its side.
-      const aim = angleBetween(p.x, p.y, p.attackTarget.x, p.attackTarget.y);
+    if (owner.attackTarget && owner.attackTarget.active) {
+      // Guard: both fists flank the direction of the target, on its side.
+      const aim = angleBetween(owner.x, owner.y, owner.attackTarget.x, owner.attackTarget.y);
       const spread = Math.PI * 0.3; // ~54° either side of the aim
-      this.placeFist(p.fistL, p, aim - spread, lateral);
-      this.placeFist(p.fistR, p, aim + spread, lateral);
+      this.placeFist(owner.fistL, owner, aim - spread, lateral);
+      this.placeFist(owner.fistR, owner, aim + spread, lateral);
       return;
     }
 
-    // Idle / moving: fists on the character's left & right, bobbing out of phase.
-    const side = p.facing + Math.PI / 2;
-    const wig = moving ? Math.sin(time * 0.02) * 4 : 0;
-    const fx = Math.cos(p.facing);
-    const fy = Math.sin(p.facing);
+    // Idle / moving: fists on the owner's left & right, bobbing out of phase.
+    const side = owner.facing + Math.PI / 2;
+    const wig = moving ? Math.sin(time * 0.02 + owner.wigPhase) * 4 : 0;
+    const fx = Math.cos(owner.facing);
+    const fy = Math.sin(owner.facing);
     const sx = Math.cos(side);
     const sy = Math.sin(side);
-    if (!p.fistL.punching) {
-      p.fistL.setPosition(p.x + sx * lateral + fx * wig, p.y + sy * lateral + fy * wig);
+    if (!owner.fistL.punching) {
+      owner.fistL.setPosition(owner.x + sx * lateral + fx * wig, owner.y + sy * lateral + fy * wig);
     }
-    if (!p.fistR.punching) {
-      p.fistR.setPosition(p.x - sx * lateral - fx * wig, p.y - sy * lateral - fy * wig);
+    if (!owner.fistR.punching) {
+      owner.fistR.setPosition(owner.x - sx * lateral - fx * wig, owner.y - sy * lateral - fy * wig);
     }
   }
 
@@ -524,24 +530,28 @@ export class GameScene extends Phaser.Scene {
 
       if (p.dead) {
         e.setVelocity(0, 0);
+        e.attackTarget = null;
         continue;
       }
 
       const d = dist(e.x, e.y, p.x, p.y);
       if (d > ENEMY.aggroRange) {
         e.setVelocity(0, 0); // hasn't noticed you yet
+        e.attackTarget = null;
         continue;
       }
 
       e.facing = angleBetween(e.x, e.y, p.x, p.y); // turn to face the player
       if (d <= e.weapon.range) {
         e.setVelocity(0, 0); // in reach — stop and swing
+        e.attackTarget = p; // fists box the player
         if (e.attackTimer <= 0) {
           e.weapon.attack({ scene: this, owner: e, target: p });
           e.attackTimer = e.weapon.cooldown;
         }
       } else {
         e.setVelocity(Math.cos(e.facing) * e.speed, Math.sin(e.facing) * e.speed);
+        e.attackTarget = null; // fists ride on the sides while chasing
       }
     }
   }
@@ -820,37 +830,6 @@ export class GameScene extends Phaser.Scene {
     target.setTint(0xffffff);
     this.time.delayedCall(70, () => {
       if (target.active) target.setTint(target.baseColor ?? COLORS.enemyMelee);
-    });
-  }
-
-  /**
-   * A little fist jabs out from `owner` toward `angle`, then retracts.
-   * Alternates left/right each call so it reads as two fists.
-   */
-  showPunch(owner, angle, scale = 1, color = COLORS.playerFist) {
-    owner.punchSide = owner.punchSide === 1 ? -1 : 1;
-    const perp = angle + Math.PI / 2;
-    const lateral = 6 * owner.punchSide; // sit the fist off to one side
-    const near = UNIT.radius;
-    const reach = 15 * scale;
-
-    const ox = Math.cos(perp) * lateral;
-    const oy = Math.sin(perp) * lateral;
-    const fist = this.add.image(
-      owner.x + Math.cos(angle) * near + ox,
-      owner.y + Math.sin(angle) * near + oy,
-      'fist'
-    );
-    fist.setTint(color).setDepth(2);
-
-    this.tweens.add({
-      targets: fist,
-      x: owner.x + Math.cos(angle) * (near + reach) + ox,
-      y: owner.y + Math.sin(angle) * (near + reach) + oy,
-      duration: 55,
-      yoyo: true,
-      ease: 'Quad.easeOut',
-      onComplete: () => fist.destroy(),
     });
   }
 

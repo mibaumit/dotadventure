@@ -36,17 +36,25 @@ export class Enemy extends Phaser.Physics.Arcade.Sprite {
     this.weapon = getWeapon('fists'); // enemies punch with fists too
     this.speed = ENEMY.speedMelee;
     this.attackTimer = 0;
-    this.punchSide = 1;
+    this.attackTarget = null; // the player while punching (fists face it)
+    this.punchToggle = false; // alternates which side-fist punches
     this.facing = 0;
-    this.startSwing = (angle, scale = 1) => scene.showPunch(this, angle, scale, color);
+    this.wigPhase = (x + y) % 7; // desync the fist wiggle between enemies
+    // Punch by thrusting one of its own side-fists (same as the player).
+    this.startSwing = (angle, scale = 1) => scene.punchSideFist(this, angle, scale);
 
     this.setTint(color);
     this.setDepth(1);
     this.setCollideWorldBounds(true);
 
     // Shrink the physics body to 95% of the sprite so enemies may overlap by
-    // ~5% but can't share the same space (see enemy-vs-enemy collider).
+    // ~5% but can't share the same space (see GameScene.separateEnemies).
     this.body.setSize(this.width * 0.95, this.height * 0.95, true);
+
+    // Two little fist-dots on the enemy's sides, in a darker shade of its colour.
+    const fistColor = Phaser.Display.Color.IntegerToColor(color).darken(40).color;
+    this.fistL = scene.add.image(x, y, 'fist').setTint(fistColor).setDepth(0);
+    this.fistR = scene.add.image(x, y, 'fist').setTint(fistColor).setDepth(0);
 
     // Floating level label above the enemy (kept in sync by GameScene).
     this.label = scene.add
@@ -55,21 +63,55 @@ export class Enemy extends Phaser.Physics.Arcade.Sprite {
       .setDepth(50);
   }
 
-  /** Apply damage; destroy when depleted. Returns true if this killed it. */
+  /** Apply damage; turn into a corpse when depleted. Returns true if it died. */
   takeDamage(amount) {
     this.hp -= amount;
     if (this.hp <= 0) {
-      this.destroy();
+      this.die();
       return true;
     }
     return false;
   }
 
-  /** Also tear down the level label when the enemy is destroyed. */
+  /**
+   * Death → corpse: the body stays on the ground, but the enemy stops counting
+   * as active (no AI, combat, collision, HUD, or fists). setActive(false) makes
+   * every gameplay loop skip it while leaving the sprite visible.
+   */
+  die() {
+    this.isDead = true;
+    this.setActive(false);
+    this.body.enable = false; // no more collisions or movement
+    this.setTint(0x555a66); // greyed-out corpse
+    this.setAlpha(0.6);
+    this.setDepth(-1); // lie beneath the living
+    if (this.label) {
+      this.label.destroy();
+      this.label = null;
+    }
+    if (this.fistL) {
+      this.fistL.destroy();
+      this.fistL = null;
+    }
+    if (this.fistR) {
+      this.fistR.destroy();
+      this.fistR = null;
+    }
+  }
+
+  /** Also tear down the level label and side-fists when destroyed. */
   destroy(fromScene) {
     if (this.label) {
       this.label.destroy();
       this.label = null;
+    }
+    if (this.fistL) {
+      this.fistL.destroy();
+      this.fistL = null;
+    }
+    if (this.fistR) {
+      this.fistR.destroy();
+      this.fistR = null;
     }
     super.destroy(fromScene);
   }
