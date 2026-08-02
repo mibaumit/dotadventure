@@ -2,23 +2,41 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
     <title>DotAdventure</title>
     <style>
       html,
       body {
         margin: 0;
         padding: 0;
+        width: 100%;
+        height: 100%;
         background: #0d1019;
         overflow: hidden;
+        /* Mobile: no page scroll/zoom, tap-highlight, or text selection so the
+           canvas gets clean touch input. */
+        touch-action: none;
+        overscroll-behavior: none;
+        -webkit-tap-highlight-color: transparent;
+        -webkit-user-select: none;
+        user-select: none;
       }
+      /* 100% of the viewport (not 100vw/vh, which include the scrollbar and can
+         resolve to a fractional width → sub-pixel canvas ghosting). */
       #game {
-        width: 100vw;
-        height: 100vh;
+        width: 100%;
+        height: 100%;
+        touch-action: none;
       }
       /* Hide the browser context menu so right-click can be used in-game. */
       canvas {
         display: block;
+        touch-action: none;
       }
     </style>
   </head>

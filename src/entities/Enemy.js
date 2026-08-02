@@ -36,6 +36,8 @@ export class Enemy extends Phaser.Physics.Arcade.Sprite {
     this.weapon = getWeapon('fists'); // enemies punch with fists too
     this.speed = ENEMY.speedMelee;
     this.attackTimer = 0;
+    this.slowTimer = 0; // ms of remaining slow (Frozen Orb chill or a fists jab)
+    this.slowMult = 1; // speed multiplier while slowed (set by whatever slowed it)
     this.attackTarget = null; // the player while punching (fists face it)
     this.alerted = false; // has it seen the player yet? (sight cone)
     this.announcedAggro = false; // has the aggro growl played for this alert?
@@ -59,10 +61,17 @@ export class Enemy extends Phaser.Physics.Arcade.Sprite {
     this.fistL = scene.add.image(x, y, 'fist').setTint(fistColor).setDepth(0);
     this.fistR = scene.add.image(x, y, 'fist').setTint(fistColor).setDepth(0);
 
-    // Floating level label above the enemy (kept in sync by GameScene).
+    // Level number shown on the enemy's body (kept in sync by GameScene).
     this.label = scene.add
-      .text(x, y, `Lv ${level}`, { fontFamily: 'monospace', fontSize: '11px', color: '#ffd7d7' })
-      .setOrigin(0.5, 1)
+      .text(x, y, `${level}`, {
+        fontFamily: 'monospace',
+        fontSize: '11px',
+        color: '#ffffff',
+        fontStyle: 'bold',
+        stroke: '#0d1019',
+        strokeThickness: 3,
+      })
+      .setOrigin(0.5, 0.5)
       .setDepth(50);
   }
 

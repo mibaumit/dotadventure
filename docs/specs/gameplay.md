@@ -47,8 +47,9 @@
 
 - Player starts **Level 1, 10 HP**, weapon Fists.
 - **XP:** killing an enemy grants `1 × enemy level` XP.
-- **Level-up** at `level × 10` XP (10, 20, 30, …). On level-up: **max HP +2**
-  and a **full heal**. XP overflow carries.
+- **Level-up** at `level × 10` XP (10, 20, 30, …). On level-up: **max HP +2**, a
+  **partial refill** of **`LEVELUP.replenishFraction` (20%)** of max HP **and**
+  mana (HP heals *only* here), and a **chime**. XP overflow carries.
 - Shown top-right: `Level N` + an amber XP bar.
 
 ## Run rules ✅
@@ -56,9 +57,10 @@
 - **Permadeath.** At 0 HP the dot freezes, greys out, and a **"You died"**
   screen shows a **Restart** button (confirm with Enter/click) → new run at
   depth 1.
-- **Descending** carries progression to the next level: level, XP, max HP, HP
-  (refilled — `GAME.healOnDescend`), weapon, the action-bar contents, and the
-  run timer.
+- **Descending** carries progression to the next level: level, XP, max HP, **HP
+  and mana as-is** (`GAME.healOnDescend` is off — leaving a level does **not**
+  refill; only a level-up heals), weapon, shield, the action-bar contents, the
+  found-items set, and the run timer.
 
 ## Time-freeze ✅ (Space)
 

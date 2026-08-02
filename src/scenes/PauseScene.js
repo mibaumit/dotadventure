@@ -56,12 +56,23 @@ export class PauseScene extends Phaser.Scene {
     this.makeButton(cx, cy + 72, 'Restart game', () => this.restartGame());
 
     this.add
-      .text(cx, cy + panelH / 2 - 20, 'Esc to resume', {
+      .text(cx, cy + panelH / 2 - 20, 'Esc / ☰ to resume', {
         fontFamily: 'monospace',
         fontSize: '13px',
         color: '#7f92b3',
       })
       .setOrigin(0.5);
+
+    // Run status + controls (moved off the gameplay HUD to keep it clean/mobile).
+    const gs = this.scene.get('GameScene');
+    const lines = gs && gs.hudLines ? gs.hudLines() : [];
+    let ty = cy + panelH / 2 + 22;
+    for (const line of lines) {
+      this.add
+        .text(cx, ty, line, { fontFamily: 'monospace', fontSize: '13px', color: '#9fb4e0' })
+        .setOrigin(0.5, 0);
+      ty += 19;
+    }
 
     this.input.keyboard.on('keydown-ESC', () => this.resumeGame());
   }

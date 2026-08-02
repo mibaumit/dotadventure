@@ -11,7 +11,8 @@ let master = null;
 let musicBus = null; // background music routes here
 let sfxBus = null; // game sounds (footsteps, punches, growls) route here
 let noise = null;
-let music = null;
+let currentTrack = null; // handle { stop() } for the playing music track
+let musicTrackIndex = 0; // which track in MUSIC_TRACKS is playing
 
 // Master volume, cycled by the on-screen sound icon (full → half → mute).
 const VOLUME_LEVELS = [0.6, 0.3, 0];
@@ -136,6 +137,149 @@ export function playPunch() {
   osc.stop(t + 0.16);
 }
 
+/** A howling ice-storm — the Frozen Orb's ~0.5s channel. */
+export function playFrostCast() {
+  if (!ctx) return;
+  const t = ctx.currentTime;
+  const dur = 0.6;
+
+  // Howling wind: looping noise through a sweeping bandpass.
+  const src = ctx.createBufferSource();
+  src.buffer = getNoise();
+  src.loop = true;
+  const bp = ctx.createBiquadFilter();
+  bp.type = 'bandpass';
+  bp.Q.value = 6;
+  bp.frequency.setValueAtTime(500, t);
+  bp.frequency.exponentialRampToValueAtTime(2400, t + dur * 0.6);
+  bp.frequency.exponentialRampToValueAtTime(900, t + dur);
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.28, t + 0.08);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  src.connect(bp).connect(g).connect(sfxBus);
+  src.start(t);
+  src.stop(t + dur + 0.05);
+
+  // Whistling overtone for the "howl".
+  const osc = ctx.createOscillator();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(1200, t);
+  osc.frequency.exponentialRampToValueAtTime(2600, t + dur * 0.5);
+  osc.frequency.exponentialRampToValueAtTime(1500, t + dur);
+  const og = ctx.createGain();
+  og.gain.setValueAtTime(0.0001, t);
+  og.gain.exponentialRampToValueAtTime(0.1, t + 0.1);
+  og.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  osc.connect(og).connect(sfxBus);
+  osc.start(t);
+  osc.stop(t + dur + 0.05);
+}
+
+/** A deep boom for a bomb detonation. */
+export function playExplosion() {
+  if (!ctx) return;
+  const t = ctx.currentTime;
+
+  // Low sub "boom".
+  const osc = ctx.createOscillator();
+  const g = ctx.createGain();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(120, t);
+  osc.frequency.exponentialRampToValueAtTime(34, t + 0.4);
+  g.gain.setValueAtTime(0.5, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.5);
+  osc.connect(g).connect(sfxBus);
+  osc.start(t);
+  osc.stop(t + 0.55);
+
+  // Broad noise blast, filtered downward.
+  const src = ctx.createBufferSource();
+  src.buffer = getNoise();
+  const lp = ctx.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.frequency.setValueAtTime(2200, t);
+  lp.frequency.exponentialRampToValueAtTime(180, t + 0.3);
+  const gn = ctx.createGain();
+  gn.gain.setValueAtTime(0.5, t);
+  gn.gain.exponentialRampToValueAtTime(0.0001, t + 0.36);
+  src.connect(lp).connect(gn).connect(sfxBus);
+  src.start(t);
+  src.stop(t + 0.4);
+}
+
+/** A bright ascending chime for a character level-up. */
+export function playLevelUp() {
+  if (!ctx) return;
+  const t0 = ctx.currentTime;
+  const notes = [523.25, 659.25, 783.99, 1046.5]; // C5 · E5 · G5 · C6
+  notes.forEach((f, i) => {
+    const t = t0 + i * 0.09;
+    const osc = ctx.createOscillator();
+    const g = ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.value = f;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.22, t + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.26);
+    osc.connect(g).connect(sfxBus);
+    osc.start(t);
+    osc.stop(t + 0.3);
+  });
+}
+
+/** A short rising hiss — "fffft" — for loosing an arrow. */
+export function playArrow() {
+  if (!ctx) return;
+  const t = ctx.currentTime;
+  const src = ctx.createBufferSource();
+  src.buffer = getNoise();
+  const bp = ctx.createBiquadFilter();
+  bp.type = 'bandpass';
+  bp.frequency.setValueAtTime(1600, t);
+  bp.frequency.exponentialRampToValueAtTime(3600, t + 0.12); // rising = a fletched whoosh
+  bp.Q.value = 0.8;
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.15, t + 0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+  src.connect(bp).connect(g).connect(sfxBus);
+  src.start(t);
+  src.stop(t + 0.18);
+}
+
+/** A short, round "plomp" — the shield absorbing a hit. */
+export function playBlock() {
+  if (!ctx) return;
+  const t = ctx.currentTime;
+
+  // Low, quickly-decaying sine "plomp".
+  const osc = ctx.createOscillator();
+  const g = ctx.createGain();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(300, t);
+  osc.frequency.exponentialRampToValueAtTime(120, t + 0.09);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.32, t + 0.008);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+  osc.connect(g).connect(sfxBus);
+  osc.start(t);
+  osc.stop(t + 0.18);
+
+  // A tiny noise "tick" for the metallic edge.
+  const src = ctx.createBufferSource();
+  src.buffer = getNoise();
+  const bp = ctx.createBiquadFilter();
+  bp.type = 'bandpass';
+  bp.frequency.value = 2200;
+  const gn = ctx.createGain();
+  gn.gain.setValueAtTime(0.12, t);
+  gn.gain.exponentialRampToValueAtTime(0.0001, t + 0.06);
+  src.connect(bp).connect(gn).connect(sfxBus);
+  src.start(t);
+  src.stop(t + 0.07);
+}
+
 // A soft-clip distortion curve for the string instrument (built once).
 let distCurve = null;
 function getDistCurve() {
@@ -174,13 +318,37 @@ export function playAggro() {
   osc.stop(t + 0.3);
 }
 
-/**
- * Ambient dungeon score (starts once, loops forever): a dark drone pad, plus a
- * distorted string ensemble playing a looping minor-key melody — Diablo-ish.
- */
-function startMusic() {
-  if (!ctx || music) return;
+// Selectable background music tracks (each builder returns a { stop() } handle).
+const MUSIC_TRACKS = [startDungeonScore, startPulseScore];
 
+/** Start the current music track (idempotent — no-op if one is already playing). */
+function startMusic() {
+  if (!ctx || currentTrack) return;
+  currentTrack = MUSIC_TRACKS[musicTrackIndex]();
+}
+
+/** Stop the current track and start the next one (wraps). Returns the new index. */
+export function cycleMusic() {
+  if (!ctx) return musicTrackIndex;
+  if (currentTrack) {
+    currentTrack.stop();
+    currentTrack = null;
+  }
+  musicTrackIndex = (musicTrackIndex + 1) % MUSIC_TRACKS.length;
+  currentTrack = MUSIC_TRACKS[musicTrackIndex]();
+  return musicTrackIndex;
+}
+
+/** Current music track index + how many tracks exist (for the UI). */
+export function getMusicTrack() {
+  return { index: musicTrackIndex, count: MUSIC_TRACKS.length };
+}
+
+/**
+ * Track 0 — ambient dungeon score: a dark drone pad plus a distorted string
+ * ensemble playing a looping minor-key melody (Diablo-ish).
+ */
+function startDungeonScore() {
   const out = ctx.createGain();
   out.gain.value = 0.0001;
   out.gain.linearRampToValueAtTime(0.45, ctx.currentTime + 4); // fade in
@@ -222,9 +390,8 @@ function startMusic() {
   const lfoGain = ctx.createGain();
   lfoGain.gain.value = 220;
   lfo.connect(lfoGain).connect(filter.frequency);
-  [o1, o2, o3, lfo].forEach((o) => o.start());
-
-  music = { out, filter, delay, feedback, o1, o2, o3, lfo, melodyTimer: null };
+  const oscs = [o1, o2, o3, lfo];
+  oscs.forEach((o) => o.start());
 
   // --- Distorted string melody (A-minor), self-looping ---
   const beat = 520; // ms per beat (slow, mournful)
@@ -236,13 +403,106 @@ function startMusic() {
     [220.0, 4], [null, 2],
   ];
   let step = 0;
+  let timer = null;
   const playStep = () => {
     const [freq, beats] = MELODY[step];
     if (freq) playStringNote(freq, (beats * beat) / 1000 * 0.92, out, delay);
     step = (step + 1) % MELODY.length;
-    music.melodyTimer = setTimeout(playStep, beats * beat);
+    timer = setTimeout(playStep, beats * beat);
   };
-  music.melodyTimer = setTimeout(playStep, 1800);
+  timer = setTimeout(playStep, 1800);
+
+  return { stop: () => stopTrack(out, oscs, timer) };
+}
+
+/**
+ * Track 1 — "deep pulse": a plucked minor arpeggio over a slow two-beat bass
+ * pulse, brighter and more rhythmic than the drone score.
+ */
+function startPulseScore() {
+  const out = ctx.createGain();
+  out.gain.value = 0.0001;
+  out.gain.linearRampToValueAtTime(0.4, ctx.currentTime + 3);
+  out.connect(musicBus);
+
+  const delay = ctx.createDelay(1.0);
+  delay.delayTime.value = 0.28;
+  const feedback = ctx.createGain();
+  feedback.gain.value = 0.34;
+  delay.connect(feedback).connect(delay);
+  delay.connect(out);
+
+  const beat = 460; // ms
+  const BASS = [110.0, 110.0, 130.81, 98.0]; // A2 · A2 · C3 · G2
+  const ARP = [220.0, 261.63, 329.63, 392.0, 329.63, 261.63]; // A C E G E C
+  let bStep = 0;
+  let aStep = 0;
+  let bTimer = null;
+  let aTimer = null;
+
+  const bassTick = () => {
+    playPluck(BASS[bStep % BASS.length], 0.55, 'sawtooth', 640, 0.26, out, delay);
+    bStep++;
+    bTimer = setTimeout(bassTick, beat * 2);
+  };
+  const arpTick = () => {
+    playPluck(ARP[aStep % ARP.length], 0.32, 'triangle', 2600, 0.15, out, delay);
+    aStep++;
+    aTimer = setTimeout(arpTick, beat / 2);
+  };
+  bTimer = setTimeout(bassTick, 400);
+  aTimer = setTimeout(arpTick, 900);
+
+  return {
+    stop: () => {
+      clearTimeout(bTimer);
+      clearTimeout(aTimer);
+      fadeOutGain(out);
+    },
+  };
+}
+
+/** A plucked note (sharp attack → decay) through a closing low-pass; dry + echo. */
+function playPluck(freq, dur, type, cutoff, level, out, delay) {
+  const t = ctx.currentTime;
+  const osc = ctx.createOscillator();
+  osc.type = type;
+  osc.frequency.value = freq;
+  const env = ctx.createGain();
+  env.gain.setValueAtTime(0.0001, t);
+  env.gain.exponentialRampToValueAtTime(level, t + 0.008);
+  env.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  const lp = ctx.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.frequency.setValueAtTime(cutoff, t);
+  lp.frequency.exponentialRampToValueAtTime(cutoff * 0.4, t + dur);
+  osc.connect(env).connect(lp);
+  lp.connect(out); // dry
+  lp.connect(delay); // echo send
+  osc.start(t);
+  osc.stop(t + dur + 0.05);
+}
+
+/** Fade a track's output out over 0.4 s (leaves any short tails to ring off). */
+function fadeOutGain(out) {
+  const t = ctx.currentTime;
+  out.gain.cancelScheduledValues(t);
+  out.gain.setValueAtTime(out.gain.value, t);
+  out.gain.linearRampToValueAtTime(0.0001, t + 0.4);
+}
+
+/** Stop a sustained track: fade its output, clear its loop timer, stop its oscs. */
+function stopTrack(out, oscs, timer) {
+  clearTimeout(timer);
+  fadeOutGain(out);
+  const stopAt = ctx.currentTime + 0.5;
+  oscs.forEach((o) => {
+    try {
+      o.stop(stopAt);
+    } catch (e) {
+      /* already stopped */
+    }
+  });
 }
 
 /** A bowed, distorted string note: two detuned saws + vibrato → waveshaper. */

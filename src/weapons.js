@@ -15,6 +15,7 @@
 // ============================================================================
 
 import { angleBetween } from './util.js';
+import { TILE, GAME } from './config.js';
 
 export const WEAPONS = {
   // Default when a dot has no weapon: bare fists, 1 damage, short reach.
@@ -30,6 +31,7 @@ export const WEAPONS = {
     color: 0xffffff,
     attack({ scene, owner, target }) {
       scene.dealDamage(target, this.damage);
+      scene.fistImpact(target, owner); // brief slow + tiny knockback on enemies
       owner.startSwing(angleBetween(owner.x, owner.y, target.x, target.y));
     },
     // A harder two-fisted jab in front.
@@ -106,9 +108,9 @@ export const WEAPONS = {
     id: 'bow',
     name: 'Bow',
     kind: 'ranged',
-    range: 300,
-    cooldown: 900,
-    damage: 15,
+    range: GAME.visionTiles * TILE, // max range = line of sight (fog vision radius)
+    cooldown: 2000, // 2s between shots (shown as a loading bar under the dot)
+    damage: 1, // same as fists
     defense: 0,
     projectileSpeed: 440,
     specialCooldown: 2000,

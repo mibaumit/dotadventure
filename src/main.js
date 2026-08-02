@@ -10,9 +10,11 @@ const config = {
   type: Phaser.AUTO, // WebGL if available, else Canvas
   parent: 'game',
   backgroundColor: COLORS.background,
+  autoRound: true, // integer canvas dimensions — avoids sub-pixel scale ghosting
   scale: {
     mode: Phaser.Scale.RESIZE, // fill the window; resize with it
-    autoCenter: Phaser.Scale.CENTER_BOTH,
+    // No autoCenter: in RESIZE mode the canvas already fills the parent, and
+    // centering a fractional size was leaving a scaled ghost of the UI.
     width: '100%',
     height: '100%',
   },

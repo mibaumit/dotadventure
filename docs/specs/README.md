@@ -50,7 +50,8 @@ src/
 ├─ sound.js         procedural audio (music + SFX)
 ├─ entities/
 │  ├─ Enemy.js      enemy dot (AI-driven by the scene)
-│  └─ … (Unit/Projectile planned)
+│  ├─ Projectile.js arrows / bolts (flight + damage data; scene drives collision)
+│  └─ … (Unit planned)
 └─ scenes/
    ├─ GameScene.js  gameplay: input, combat, fog, items, rendering
    └─ PauseScene.js Esc overlay (volume sliders, continue/restart)

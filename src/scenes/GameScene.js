@@ -8,20 +8,27 @@
 // this file is structured so those systems each become their own small method.
 // ============================================================================
 
-import { TILE, COLORS, UNIT, ENEMY, GAME } from '../config.js';
+import { TILE, COLORS, UNIT, ENEMY, GAME, HOTBAR, BOW, BOMB, POTION, MANA, PIXEL, PROJECTILE, SHIELD, FROST, FISTS, LEVELUP } from '../config.js';
 import { generateLevel, WALL, roomCenterTile } from '../levelgen.js';
 import { makeShapeTexture, shapeTextureKey } from '../shapes.js';
-import { makeRng, randInt, dist, angleDelta, angleBetween, clamp, TAU } from '../util.js';
+import { makeRng, randInt, dist, angleDelta, angleBetween, clamp, TAU, pick } from '../util.js';
 import { Enemy } from '../entities/Enemy.js';
+import { Projectile } from '../entities/Projectile.js';
 import { getWeapon } from '../weapons.js';
-import { getItem, ITEM_IDS, ITEM_SHAPES } from '../items.js';
+import { getItem, itemPoolForDepth, ITEM_SHAPES } from '../items.js';
 import {
   ensureStarted,
   playFootstep,
   playPunch,
   playAggro,
+  playBlock,
+  playArrow,
+  playLevelUp,
+  playExplosion,
   cycleVolume,
   getVolume,
+  cycleMusic,
+  getMusicTrack,
 } from '../sound.js';
 
 export class GameScene extends Phaser.Scene {
@@ -39,12 +46,16 @@ export class GameScene extends Phaser.Scene {
     this.frozen = false; // tactical time-freeze (Space)
     this.stepTimer = 0; // footstep-sound cadence
     this.carryHotbar = data?.hotbar ?? null; // action-bar items carried down
+    this.foundItems = new Set(data?.foundItems ?? []); // items already looted this run
   }
 
   create() {
+    this.modalOpen = false; // true while the chest-item info dialog is up
+    this.bombs = []; // live dropped bombs (ticking fuses)
     this.buildTextures();
     this.buildLevel();
     this.buildExit();
+    this.buildEntranceStairs();
     this.spawnPlayer();
     this.spawnEnemies();
     this.hotbar = this.carryHotbar ?? []; // up to 9 {id, count} slots
@@ -55,6 +66,30 @@ export class GameScene extends Phaser.Scene {
     this.setupOverlay();
     this.setupHotbarUI();
     this.setupFog();
+    this.showLevelHeadline();
+  }
+
+  /** Big "Stage N" title that fades out at the start of each level. */
+  showLevelHeadline() {
+    const label = this.add
+      .text(this.scale.width / 2, this.scale.height * 0.4, `Stage ${this.depth}`, {
+        fontFamily: 'monospace',
+        fontSize: '52px',
+        color: '#3ad0ff',
+        fontStyle: 'bold',
+      })
+      .setOrigin(0.5)
+      .setScrollFactor(0)
+      .setDepth(220);
+    this.tweens.add({
+      targets: label,
+      alpha: { from: 1, to: 0 },
+      y: label.y - 30,
+      delay: 800,
+      duration: 1500,
+      ease: 'Quad.easeIn',
+      onComplete: () => label.destroy(),
+    });
   }
 
   // --------------------------------------------------------------------------
@@ -86,10 +121,70 @@ export class GameScene extends Phaser.Scene {
       sg.destroy();
     }
 
+    // Bow pickup icon: a white arc + bowstring (baked before the shape loop so
+    // it isn't routed through makeShapeTexture, which only knows basic shapes).
+    if (!this.textures.exists('item_bow')) {
+      const bg = this.make.graphics({ x: 0, y: 0, add: false });
+      bg.lineStyle(3, 0xffffff, 1);
+      bg.beginPath();
+      bg.arc(6, 10, 8, -Math.PI * 0.5, Math.PI * 0.5); // right-bowing limb
+      bg.strokePath();
+      bg.lineStyle(1, 0xffffff, 1);
+      bg.beginPath();
+      bg.moveTo(6, 2);
+      bg.lineTo(6, 18); // bowstring
+      bg.strokePath();
+      bg.generateTexture('item_bow', 20, 20);
+      bg.destroy();
+    }
+    // Bomb pickup icon: a black round bomb with a little fuse + spark.
+    if (!this.textures.exists('item_bomb')) {
+      const bg = this.make.graphics({ x: 0, y: 0, add: false });
+      bg.fillStyle(0x111318, 1); // black body
+      bg.fillCircle(10, 12, 7);
+      bg.fillStyle(0x33383f, 1); // subtle highlight
+      bg.fillCircle(8, 10, 2);
+      bg.fillStyle(0x8a6a3a, 1); // brown fuse
+      bg.fillRect(9, 2, 2, 5);
+      bg.fillStyle(0xffb020, 1); // lit spark
+      bg.fillCircle(10, 2, 2);
+      bg.generateTexture('item_bomb', 20, 20);
+      bg.destroy();
+    }
+    // Dropped-bomb body (no fuse — the burning fuse is drawn dynamically).
+    if (!this.textures.exists('bomb_body')) {
+      const bb = this.make.graphics({ x: 0, y: 0, add: false });
+      bb.fillStyle(0x111318, 1);
+      bb.fillCircle(10, 12, 7);
+      bb.fillStyle(0x33383f, 1);
+      bb.fillCircle(8, 10, 2);
+      bb.generateTexture('bomb_body', 20, 20);
+      bb.destroy();
+    }
+    // Shield pickup icon: a white shield silhouette.
+    if (!this.textures.exists('item_shield')) {
+      const dg = this.make.graphics({ x: 0, y: 0, add: false });
+      dg.fillStyle(0xffffff, 1);
+      dg.fillPoints(
+        [
+          { x: 10, y: 1 },
+          { x: 18, y: 5 },
+          { x: 18, y: 11 },
+          { x: 10, y: 19 },
+          { x: 2, y: 11 },
+          { x: 2, y: 5 },
+        ],
+        true
+      );
+      dg.generateTexture('item_shield', 20, 20);
+      dg.destroy();
+    }
+
     for (const shape of ITEM_SHAPES) {
       makeShapeTexture(this, `item_${shape}`, shape, 20); // item pickup icons
     }
     makeShapeTexture(this, 'loot', 'square', 10); // little dropped loot square
+    makeShapeTexture(this, 'pixel', 'square', PIXEL.size); // resource pixels (tinted red/blue)
 
     // Arrow projectile (a short dash).
     if (!this.textures.exists('arrow')) {
@@ -169,8 +264,15 @@ export class GameScene extends Phaser.Scene {
     this.player.dead = false;
     this.player.xp = 0;
     this.player.xpToNext = this.player.level * 10; // first level-up needs 10 xp
+    this.player.maxMana = MANA.max;
+    this.player.mana = MANA.max; // starts full; only spent/shown once a mana item is held
     this.player.weapon = getWeapon('fists');
+    this.player.hasShield = false;
+    this.player.shieldTimer = 0; // ms until the shield can block again (0 = ready)
+    this.player.usingBow = false; // shooting (vs point-blank fists) this frame
+    this.player.bowDraw = 0; // 0..1 bowstring/hand "release" animation phase
     this.player.attackTimer = 0; // ms until the next auto-attack is ready
+    this.player.attackCooldownMax = 0; // the cooldown that timer counts down from
     this.player.attackTarget = null; // enemy currently being boxed (fists face it)
     this.player.moveTarget = null; // click-to-move destination, or null
     this.player.bestDist = Infinity; // closest we've gotten to moveTarget (stuck check)
@@ -191,7 +293,10 @@ export class GameScene extends Phaser.Scene {
       this.player.xpToNext = c.xpToNext;
       this.player.maxHp = c.maxHp;
       this.player.hp = c.hp;
+      this.player.maxMana = c.maxMana ?? MANA.max;
+      this.player.mana = c.mana ?? this.player.maxMana;
       this.player.weapon = getWeapon(c.weaponId);
+      this.player.hasShield = c.hasShield ?? false;
     }
 
     // Two little fist-dots that ride on the character's sides (darker shade).
@@ -231,6 +336,39 @@ export class GameScene extends Phaser.Scene {
       .setDepth(-3);
   }
 
+  /**
+   * Draw an "up" staircase at the spawn point on stages below the first — the
+   * stairs you just came down. Cosmetic for now (ascending isn't wired yet).
+   */
+  buildEntranceStairs() {
+    if (this.depth <= 1) return; // stage 1 has no stairs above it
+    const sx = (this.level.start.tx + 0.5) * TILE;
+    const sy = (this.level.start.ty + 0.5) * TILE;
+
+    const s = TILE * 0.72;
+    const g = this.add.graphics().setDepth(-3);
+    g.fillStyle(0x243049, 1); // recessed base tile
+    g.fillRect(sx - s / 2 - 3, sy - s / 2 - 3, s + 6, s + 6);
+
+    // Ascending steps (widening toward the bottom) to read as "up".
+    const steps = 4;
+    const stepH = s / steps;
+    g.fillStyle(0x9fb4e0, 1);
+    for (let i = 0; i < steps; i++) {
+      const w = s * (1 - (steps - 1 - i) / (steps + 1));
+      g.fillRect(sx - w / 2, sy - s / 2 + i * stepH, w, stepH - 2);
+    }
+
+    this.add
+      .text(sx, sy - s / 2 - 6, '▲ up', {
+        fontFamily: 'monospace',
+        fontSize: '11px',
+        color: '#cfe6ff',
+      })
+      .setOrigin(0.5, 1)
+      .setDepth(-3);
+  }
+
   /** A small, darker "fist" dot that rides beside the character. */
   makeFist() {
     return this.add.image(0, 0, 'fist').setTint(COLORS.playerFist).setDepth(0);
@@ -242,6 +380,10 @@ export class GameScene extends Phaser.Scene {
    */
   spawnEnemies() {
     this.enemies = this.physics.add.group();
+    // Plain (non-physics) container: each projectile still gets its own Arcade
+    // body in its constructor. Using a *physics* group here zeroes a child's
+    // velocity on add() — which left arrows spawned-but-stationary.
+    this.projectiles = this.add.group();
     const rng = makeRng(this.seed + this.depth * 7919);
 
     // Keep a buffer around the start so nothing can aggro the player instantly.
@@ -256,12 +398,15 @@ export class GameScene extends Phaser.Scene {
       for (let n = 0; n < count; n++) {
         const tx = randInt(rng, room.x, room.x + room.w - 1);
         const ty = randInt(rng, room.y, room.y + room.h - 1);
+        if (this.level.grid[ty]?.[tx] === WALL) continue; // never spawn inside a wall
         const px = (tx + 0.5) * TILE;
         const py = (ty + 0.5) * TILE;
         if (dist(px, py, startX, startY) < safeRadius) continue; // too near the start
 
         const level = randInt(rng, 1, this.depth); // tougher enemies deeper down
         const enemy = new Enemy(this, px, py, { shape: 'square', level });
+        enemy.patrol = this.roomPatrolPath(room); // walk the room's walls while idle
+        enemy.patrolIdx = 0;
         this.enemies.add(enemy);
       }
     }
@@ -273,18 +418,26 @@ export class GameScene extends Phaser.Scene {
   }
 
   /**
-   * Place one treasure chest in a random non-start room. Items come ONLY from
-   * chests (and monster drops) — no scattered floor loot.
+   * Place one treasure chest in a random room that is NOT the start room and NOT
+   * the stairs room (so loot and the exit never share a room). Items come ONLY
+   * from chests (and monster drops) — no scattered floor loot.
    */
   spawnChest() {
     this.pickups = this.physics.add.group();
     this.physics.add.overlap(this.player, this.pickups, (_p, pickup) => this.collectItem(pickup));
 
+    // Resource pixels (red = HP for the potion, blue = mana) dropped by kills.
+    this.pixels = this.physics.add.group();
+    this.physics.add.overlap(this.player, this.pixels, (_p, px) => this.collectPixel(px));
+
     this.chestRng = makeRng(this.seed + this.depth * 6151);
     const rooms = this.level.rooms;
-    if (rooms.length < 2) return;
+    const ex = this.level.exit;
+    // Candidates: skip the start room (0) and whichever room holds the stairs.
+    const candidates = rooms.filter((r, i) => i !== 0 && !tileInRoom(ex.tx, ex.ty, r));
+    if (candidates.length === 0) return; // no valid room — no chest this level
 
-    const room = rooms[1 + randInt(this.chestRng, 0, rooms.length - 2)];
+    const room = candidates[randInt(this.chestRng, 0, candidates.length - 1)];
     const c = roomCenterTile(room);
     const chest = this.physics.add
       .sprite((c.tx + 0.5) * TILE, (c.ty + 0.5) * TILE, 'chest')
@@ -302,20 +455,20 @@ export class GameScene extends Phaser.Scene {
     chest.opened = true;
     chest.setTint(0x6b7280); // greyed = looted
 
-    // Depth 1 has a fixed starter loadout; deeper levels are random.
-    const contents =
-      this.depth === 1 ? ['potion', 'frost'] : [ITEM_IDS[randInt(this.chestRng, 0, ITEM_IDS.length - 1)]];
-    contents.forEach((id, i) => {
-      const dx = (i - (contents.length - 1) / 2) * 18;
-      this.createPickup(chest.x + dx, chest.y - 6, id);
-    });
+    // One item, from this depth's pool minus anything already picked up this run
+    // (every item is unique across chests). Empty if the pool is exhausted. Uses
+    // Math.random so loot is genuinely random per run, not tied to the level seed.
+    const pool = itemPoolForDepth(this.depth).filter((id) => !this.foundItems.has(id));
+    if (pool.length === 0) return;
+    const id = pick(Math.random, pool);
+    this.createPickup(chest.x, chest.y - 6, id);
   }
 
   /** Create a floating item pickup on the ground (from a room or a monster drop). */
   createPickup(x, y, id) {
     const item = getItem(id);
     const pickup = this.physics.add.sprite(x, y, `item_${item.shape}`).setDepth(0);
-    if (item.shape !== 'scroll') pickup.setTint(item.color); // scroll art is multi-colour
+    if (item.shape !== 'scroll' && item.shape !== 'bomb') pickup.setTint(item.color); // these have their own colours
     pickup.itemId = id;
     this.tweens.add({
       targets: pickup,
@@ -329,16 +482,153 @@ export class GameScene extends Phaser.Scene {
     return pickup;
   }
 
-  /** Add a picked-up item to the action bar (stacking by id); announce it. */
+  /**
+   * Add a picked-up item to the action bar and announce it. Behaviour depends on
+   * the item's `kind`: consumables stack by count; a reservoir (potion) tops up
+   * to full on a duplicate and tracks stored HP on the slot; a mana item is a
+   * one-off (duplicates ignored).
+   */
   collectItem(pickup) {
     const id = pickup.itemId;
-    const slot = this.hotbar.find((s) => s.id === id);
-    if (slot) slot.count += 1;
-    else if (this.hotbar.length < 9) this.hotbar.push({ id, count: 1 });
-    else return; // bar full — leave it on the ground
-    pickup.destroy();
     const item = getItem(id);
-    this.showPickupText(item.name, hexColor(item.color));
+
+    // Equipment (Bow, Shield) equips on pickup instead of taking a bar slot.
+    if (item.kind === 'weapon') {
+      this.equipWeaponItem(item);
+      pickup.destroy();
+      this.showItemDialog(item);
+      return;
+    }
+    if (item.kind === 'shield') {
+      this.player.hasShield = true;
+      this.player.shieldTimer = 0; // ready to block immediately
+      pickup.destroy();
+      this.showItemDialog(item);
+      return;
+    }
+
+    const existing = this.hotbar.find((s) => s.id === id);
+    if (existing) {
+      if (item.kind === 'consumable') existing.count += 1;
+      else if (item.kind === 'reservoir') existing.charge = item.capacity; // duplicate refills it
+      // mana / cooldown items: nothing to stack — already held.
+    } else if (this.hotbar.length < 9) {
+      if (item.kind === 'reservoir') this.hotbar.push({ id, charge: item.initialCharge });
+      else if (item.kind === 'mana') this.hotbar.push({ id });
+      else if (item.kind === 'cooldown') this.hotbar.push({ id, cd: 0 });
+      else this.hotbar.push({ id, count: 1 });
+    } else {
+      return; // bar full — leave it on the ground
+    }
+
+    pickup.destroy();
+    this.showItemDialog(item);
+  }
+
+  /**
+   * Freeze the game and show an info panel for a just-collected chest item
+   * (icon + name + how it works). Any key or tap dismisses it and resumes play.
+   */
+  showItemDialog(item) {
+    this.foundItems.add(item.id); // picked up → never rolled by another chest
+    if (this.itemDialogObjs) for (const o of this.itemDialogObjs) o.destroy(); // never stack
+    this.modalOpen = true;
+    this.physics.pause();
+
+    const { width, height } = this.scale;
+    const cx = width / 2;
+    const cy = height / 2;
+    const panelW = Math.min(360, width - 40);
+    const panelH = 240;
+    const D = 260;
+    const objs = [];
+
+    objs.push(
+      this.add.rectangle(0, 0, width, height, 0x000000, 0.6).setOrigin(0, 0).setScrollFactor(0).setDepth(D)
+    );
+    const panel = this.add
+      .rectangle(cx, cy, panelW, panelH, 0x141a2b, 0.98)
+      .setStrokeStyle(2, item.color)
+      .setScrollFactor(0)
+      .setDepth(D + 1)
+      .setInteractive({ useHandCursor: true });
+    panel.on('pointerdown', () => this.dismissItemDialog()); // click/tap the box
+    objs.push(panel);
+    objs.push(
+      this.add
+        .text(cx, cy - panelH / 2 + 18, 'Item found', {
+          fontFamily: 'monospace',
+          fontSize: '13px',
+          color: '#7f92b3',
+        })
+        .setOrigin(0.5)
+        .setScrollFactor(0)
+        .setDepth(D + 2)
+    );
+
+    const icon = this.add
+      .image(cx, cy - 52, `item_${item.shape}`)
+      .setScale(2.6)
+      .setScrollFactor(0)
+      .setDepth(D + 2);
+    if (item.shape !== 'scroll' && item.shape !== 'bomb') icon.setTint(item.color); // these have their own colours
+    objs.push(icon);
+
+    objs.push(
+      this.add
+        .text(cx, cy - 14, item.name, {
+          fontFamily: 'monospace',
+          fontSize: '22px',
+          color: hexColor(item.color),
+          fontStyle: 'bold',
+        })
+        .setOrigin(0.5)
+        .setScrollFactor(0)
+        .setDepth(D + 2)
+    );
+    objs.push(
+      this.add
+        .text(cx, cy + 16, item.desc ?? '', {
+          fontFamily: 'monospace',
+          fontSize: '13px',
+          color: '#cfe6ff',
+          align: 'center',
+          wordWrap: { width: panelW - 34 },
+        })
+        .setOrigin(0.5, 0)
+        .setScrollFactor(0)
+        .setDepth(D + 2)
+    );
+    objs.push(
+      this.add
+        .text(cx, cy + panelH / 2 - 16, 'Press Space or tap this box to continue', {
+          fontFamily: 'monospace',
+          fontSize: '12px',
+          color: '#9fb4e0',
+        })
+        .setOrigin(0.5)
+        .setScrollFactor(0)
+        .setDepth(D + 2)
+    );
+
+    this.itemDialogObjs = objs;
+
+    // Dismiss only on Space, or a click/tap on the panel (handled above).
+    this.input.keyboard.once('keydown-SPACE', () => this.dismissItemDialog());
+  }
+
+  /** Close the item dialog and resume the game. */
+  dismissItemDialog() {
+    if (!this.modalOpen) return;
+    this.modalOpen = false;
+    for (const o of this.itemDialogObjs || []) o.destroy();
+    this.itemDialogObjs = null;
+    if (!this.frozen) this.physics.resume(); // don't override a player time-freeze
+  }
+
+  /** Equip a weapon item (Bow): swap the dot's weapon. */
+  equipWeaponItem(item) {
+    this.player.weapon = getWeapon(item.weaponId);
   }
 
   /** A big item name that floats up and fades, center-screen, on pickup. */
@@ -368,10 +658,37 @@ export class GameScene extends Phaser.Scene {
     if (this.player.dead) return;
     const slot = this.hotbar[i];
     if (!slot) return;
-    if (getItem(slot.id).use(this)) {
+    const item = getItem(slot.id);
+
+    // Cooldown gate — any item with a cooldown can't be used while recharging.
+    if (item.cooldownMs && (slot.cd ?? 0) > 0) return;
+
+    // `use` returns whether it actually ACTED.
+    const acted = item.use(this, slot);
+    if (!acted) return;
+
+    if (item.kind === 'consumable') {
       slot.count -= 1;
       if (slot.count <= 0) this.hotbar.splice(i, 1); // compact the bar
     }
+    if (item.cooldownMs) slot.cd = item.cooldownMs; // start the recharge
+  }
+
+  /** Advance action-bar cooldowns (e.g. the Bomb's recharge). */
+  tickHotbarCooldowns(delta) {
+    for (const slot of this.hotbar) {
+      if (slot.cd > 0) slot.cd = Math.max(0, slot.cd - delta);
+    }
+  }
+
+  /** The held Health Potion slot (a reservoir), or null. */
+  heldPotionSlot() {
+    return this.hotbar.find((s) => getItem(s.id).kind === 'reservoir' && s.id === 'potion') ?? null;
+  }
+
+  /** Does the player hold any mana-cost item? (Controls the mana bar + blue drops.) */
+  hasManaItem() {
+    return this.hotbar.some((s) => getItem(s.id).kind === 'mana');
   }
 
   setupCamera() {
@@ -388,19 +705,25 @@ export class GameScene extends Phaser.Scene {
     this.input.on('pointerdown', () => ensureStarted());
     this.input.keyboard.on('keydown', () => ensureStarted());
 
-    // Action bar: number keys 1-9 use the item in that slot.
+    // Action bar: number keys 1..slots use the item in that slot.
     this.input.keyboard.on('keydown', (event) => {
-      if (event.key >= '1' && event.key <= '9') this.useHotbarSlot(Number(event.key) - 1);
+      if (this.modalOpen) return; // dialog swallows the keypress (it dismisses)
+      const k = Number(event.key);
+      if (k >= 1 && k <= HOTBAR.slots) this.useHotbarSlot(k - 1);
     });
 
-    // Left-click: an enemy → chase & attack it; the ground → walk there.
-    // (WASD overrides either.)
+    // A tap/click: on-screen UI first (so touch can drive everything), then a
+    // world order — tap an enemy to attack it, the ground to walk there.
     this.input.on('pointerdown', (pointer) => {
-      // Clicking the sound icon cycles volume and consumes the click.
-      if (this.overSoundIcon(pointer.x, pointer.y)) {
-        cycleVolume();
-        return;
-      }
+      if (this.modalOpen) return; // dialog swallows the tap (it dismisses)
+      // On-screen buttons consume the tap (menu / freeze / sound / music / bar).
+      if (this.overSoundIcon(pointer.x, pointer.y)) return void cycleVolume();
+      if (this.inRect(pointer, this.musicRect)) return void cycleMusic();
+      if (this.inRect(pointer, this.menuRect)) return void this.openPause();
+      if (this.inRect(pointer, this.freezeRect)) return void this.toggleFreeze();
+      const slot = this.hotbarSlotAt(pointer.x, pointer.y);
+      if (slot >= 0 && this.hotbar[slot]) return void this.useHotbarSlot(slot);
+
       if (this.player.dead) return;
       if (!pointer.leftButtonDown()) return;
 
@@ -421,15 +744,37 @@ export class GameScene extends Phaser.Scene {
     // Space toggles a tactical time-freeze: simulation halts, but you can still
     // click to issue orders. (Capture it so the page doesn't scroll.)
     this.input.keyboard.addCapture('SPACE');
-    this.input.keyboard.on('keydown-SPACE', () => this.toggleFreeze());
-
-    // Esc opens the pause menu (which pauses this scene underneath).
-    this.input.keyboard.on('keydown-ESC', () => {
-      if (!this.scene.isPaused()) {
-        this.scene.pause();
-        this.scene.launch('PauseScene');
-      }
+    this.input.keyboard.on('keydown-SPACE', () => {
+      if (!this.modalOpen) this.toggleFreeze();
     });
+
+    // Esc (or the ☰ button) opens the pause menu.
+    this.input.keyboard.on('keydown-ESC', () => this.openPause());
+  }
+
+  /** Open the pause menu (pausing this scene underneath), if not already open. */
+  openPause() {
+    if (this.player.dead || this.modalOpen || this.scene.isPaused()) return;
+    this.scene.pause();
+    this.scene.launch('PauseScene');
+  }
+
+  /** Point-in-rect test for a screen-space UI hit area `{x,y,w,h}`. */
+  inRect(pointer, r) {
+    return (
+      r && pointer.x >= r.x && pointer.x <= r.x + r.w && pointer.y >= r.y && pointer.y <= r.y + r.h
+    );
+  }
+
+  /** Index of the action-bar slot under a screen point, or -1. */
+  hotbarSlotAt(sx, sy) {
+    const rects = this.hotbarRects;
+    if (!rects) return -1;
+    for (let i = 0; i < rects.length; i++) {
+      const r = rects[i];
+      if (sx >= r.x && sx <= r.x + r.w && sy >= r.y && sy <= r.y + r.h) return i;
+    }
+    return -1;
   }
 
   /** Space: freeze/unfreeze the simulation while leaving order-input live. */
@@ -487,21 +832,45 @@ export class GameScene extends Phaser.Scene {
     return best;
   }
 
-  /** Fixed on-screen text (doesn't scroll with the world). */
+  /**
+   * On-screen HUD chrome. The old top-left title/controls/status text is gone
+   * (that info now lives on the pause screen — see hudLines()); all that's left
+   * up top is a touch-friendly ☰ menu button that opens the pause menu.
+   */
   buildHud() {
-    const style = { fontFamily: 'monospace', fontSize: '16px', color: '#cfe6ff' };
-    this.add
-      .text(12, 10, 'DotAdventure', { ...style, fontSize: '22px', color: '#3ad0ff' })
-      .setScrollFactor(0)
-      .setDepth(100);
-    this.add
-      .text(12, 40, 'WASD/click move · click a square to attack · Space freeze · ▼ descend', style)
-      .setScrollFactor(0)
-      .setDepth(100);
-    this.hudText = this.add
-      .text(12, 64, '', style)
-      .setScrollFactor(0)
-      .setDepth(100);
+    this.menuIcon = this.add.graphics().setScrollFactor(0).setDepth(100);
+    this.menuRect = { x: 0, y: 0, w: 0, h: 0 };
+  }
+
+  /** Draw the top-left ☰ menu button (opens the pause menu) + its tap area. */
+  drawMenuButton() {
+    const g = this.menuIcon;
+    g.clear();
+    const x = 12;
+    const y = 12;
+    const w = 36;
+    const h = 32;
+    this.menuRect = { x, y, w, h };
+    g.fillStyle(0x0d1420, 0.72);
+    g.fillRect(x, y, w, h);
+    g.lineStyle(1, 0x2a3350, 1);
+    g.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+    g.fillStyle(0xcfe6ff, 0.9);
+    for (let i = 0; i < 3; i++) g.fillRect(x + 9, y + 9 + i * 6, w - 18, 2); // ☰
+  }
+
+  /** Status + controls lines shown on the pause screen (see PauseScene). */
+  hudLines() {
+    const p = this.player;
+    let weapon = p.weapon.name;
+    if (p.hasShield) weapon += p.shieldTimer <= 0 ? ' + Shield' : ' + Shield (recharging)';
+    return [
+      `Depth ${this.depth}    HP ${Math.ceil(p.hp)}/${p.maxHp}    Enemies ${this.enemies.countActive(true)}`,
+      `Weapon: ${weapon}`,
+      '',
+      'Move: tap the ground / WASD     Attack: tap an enemy',
+      'Freeze: ⏯ button / Space     Descend: reach the ▼ stairs',
+    ];
   }
 
   /**
@@ -617,13 +986,26 @@ export class GameScene extends Phaser.Scene {
     this.coneFx = this.add.graphics().setDepth(-2); // sight cones, under the entities
     this.fx = this.add.graphics().setDepth(50); // world-space, redrawn every frame
     this.playerLabel = this.add
-      .text(0, 0, '', { fontFamily: 'monospace', fontSize: '12px', color: '#ffffff' })
-      .setOrigin(0.5, 1)
+      .text(0, 0, '', {
+        fontFamily: 'monospace',
+        fontSize: '11px',
+        color: '#ffffff',
+        fontStyle: 'bold',
+        stroke: '#0d1019',
+        strokeThickness: 3,
+      })
+      .setOrigin(0.5, 0.5) // sit on the body, not floating above
       .setDepth(50);
 
     // Fixed top-right corner: Level + XP bar (screen-space, doesn't scroll).
+    // Top-right: dungeon Stage (depth) above the character Level + XP.
+    this.stageText = this.add
+      .text(0, 0, '', { fontFamily: 'monospace', fontSize: '22px', color: '#3ad0ff' })
+      .setOrigin(1, 0)
+      .setScrollFactor(0)
+      .setDepth(100);
     this.levelText = this.add
-      .text(0, 0, '', { fontFamily: 'monospace', fontSize: '20px', color: '#ffcf5c' })
+      .text(0, 0, '', { fontFamily: 'monospace', fontSize: '16px', color: '#ffcf5c' })
       .setOrigin(1, 0)
       .setScrollFactor(0)
       .setDepth(100);
@@ -643,12 +1025,43 @@ export class GameScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setDepth(101);
 
+    // Mana bar (blue) sits just under the XP bar — only shown while a mana item
+    // is held (see updateManaUi). Starts hidden.
+    this.manaBarBg = this.add
+      .rectangle(0, 0, 170, 8, COLORS.hpBack, 0.5)
+      .setOrigin(0, 0)
+      .setScrollFactor(0)
+      .setDepth(100)
+      .setVisible(false);
+    this.manaBarFill = this.add
+      .rectangle(0, 0, 170, 8, COLORS.mana)
+      .setOrigin(0, 0)
+      .setScrollFactor(0)
+      .setDepth(101)
+      .setVisible(false);
+    this.manaText = this.add
+      .text(0, 0, '', { fontFamily: 'monospace', fontSize: '12px', color: '#bfe6ff' })
+      .setOrigin(1, 0)
+      .setScrollFactor(0)
+      .setDepth(101)
+      .setVisible(false);
+
     // Bottom-left: clickable sound icon (cycles volume: full → half → mute).
     this.soundIcon = this.add.graphics().setScrollFactor(0).setDepth(100);
     this.soundRect = { x: 0, y: 0, w: 0, h: 0 };
 
+    // Bottom-left: a music-cycle button (♪) next to the sound icon.
+    this.musicIcon = this.add.graphics().setScrollFactor(0).setDepth(100);
+    this.musicRect = { x: 0, y: 0, w: 0, h: 0 };
+    this.musicLabel = this.add
+      .text(0, 0, '', { fontFamily: 'monospace', fontSize: '11px', color: '#cfe6ff' })
+      .setOrigin(0, 0.5)
+      .setScrollFactor(0)
+      .setDepth(100);
+
     // Bottom-right: game timer above a big play/pause (time-freeze) indicator.
     this.timeIcon = this.add.graphics().setScrollFactor(0).setDepth(100);
+    this.freezeRect = { x: 0, y: 0, w: 0, h: 0 }; // tap area, set each frame
     this.timerText = this.add
       .text(0, 0, '', { fontFamily: 'monospace', fontSize: '18px', color: '#cfe6ff' })
       .setOrigin(0.5, 1)
@@ -659,9 +1072,10 @@ export class GameScene extends Phaser.Scene {
   /** Bottom-center WoW-style action bar (9 slots, keys 1-9). */
   setupHotbarUI() {
     this.hotbarFx = this.add.graphics().setScrollFactor(0).setDepth(100);
+    this.hotbarRects = []; // per-slot screen rects for tap/click hit-testing
     this.hotbarKeyLabels = [];
     this.hotbarCountLabels = [];
-    for (let i = 0; i < 9; i++) {
+    for (let i = 0; i < HOTBAR.slots; i++) {
       this.hotbarKeyLabels.push(
         this.add
           .text(0, 0, `${i + 1}`, { fontFamily: 'monospace', fontSize: '10px', color: '#7f92b3' })
@@ -679,18 +1093,37 @@ export class GameScene extends Phaser.Scene {
   }
 
   /** Redraw the action bar each frame (slot frames, icons, stack counts). */
+  /**
+   * Action-bar slot size — fit 9 slots to the screen width (so it works on a
+   * narrow phone), clamped to a comfortable touch-target size. Shared so the
+   * corner buttons can sit clear above the bar.
+   */
+  hotbarSlotSize() {
+    const n = HOTBAR.slots;
+    const gap = 5;
+    const margin = 8;
+    return clamp(Math.floor((this.scale.width - margin * 2 - (n - 1) * gap) / n), 34, 54);
+  }
+
+  /** Y of the top of the bottom action-bar strip (corner buttons sit above it). */
+  bottomStripTop() {
+    return this.scale.height - this.hotbarSlotSize() - 16;
+  }
+
   drawHotbar() {
     const g = this.hotbarFx;
     g.clear();
-    const n = 9;
-    const slot = 42;
-    const gap = 6;
+    const n = HOTBAR.slots;
+    const gap = 5;
+    const slot = this.hotbarSlotSize();
     const totalW = n * slot + (n - 1) * gap;
     const x0 = Math.round(this.scale.width / 2 - totalW / 2);
-    const y = this.scale.height - slot - 10;
+    const y = this.scale.height - slot - 8;
+    const iconSize = Math.round(slot * 0.52);
 
     for (let i = 0; i < n; i++) {
       const x = x0 + i * (slot + gap);
+      this.hotbarRects[i] = { x, y, w: slot, h: slot };
       g.fillStyle(0x0d1420, 0.72);
       g.fillRect(x, y, slot, slot);
       g.lineStyle(1, 0x2a3350, 1);
@@ -700,20 +1133,56 @@ export class GameScene extends Phaser.Scene {
       const s = this.hotbar[i];
       if (s) {
         const item = getItem(s.id);
-        this.drawIcon(g, item.shape, x + slot / 2, y + slot / 2, 22, item.color);
-        this.hotbarCountLabels[i]
-          .setPosition(x + slot - 4, y + slot - 2)
-          .setText(s.count > 1 ? `${s.count}` : '');
+
+        // The icon's opacity encodes state: a reservoir (potion) shows its fill
+        // level; a mana spell dims when unaffordable; a cooldown item dims while
+        // recharging. The corner label shows a stack count or seconds-remaining.
+        let alpha = 1;
+        let label = '';
+        if (item.kind === 'reservoir') {
+          alpha = 0.25 + 0.75 * clamp((s.charge ?? 0) / item.capacity, 0, 1);
+        } else if (item.kind === 'consumable' && s.count > 1) {
+          label = `${s.count}`;
+        }
+        // Any item on cooldown → dim + seconds remaining; a mana item you can't
+        // afford also dims.
+        if ((s.cd ?? 0) > 0) {
+          alpha = 0.35;
+          label = `${Math.ceil(s.cd / 1000)}`;
+        } else if (item.kind === 'mana' && this.player.mana < item.manaCost) {
+          alpha = 0.35;
+        }
+
+        this.drawIcon(g, item.shape, x + slot / 2, y + slot / 2, iconSize, item.color, alpha);
+
+        // Reservoir (potion): a little vertical fill gauge on the slot's right edge.
+        if (item.kind === 'reservoir') {
+          const frac = clamp((s.charge ?? 0) / item.capacity, 0, 1);
+          const bw = 3;
+          const bh = slot - 12;
+          const bx = x + slot - 6;
+          const byTop = y + 6;
+          g.fillStyle(0x000000, 0.55); // track
+          g.fillRect(bx - 1, byTop - 1, bw + 2, bh + 2);
+          g.fillStyle(item.color, 0.95); // fill from the bottom up
+          g.fillRect(bx, byTop + bh * (1 - frac), bw, bh * frac);
+        }
+
+        this.hotbarCountLabels[i].setPosition(x + slot - 4, y + slot - 2).setText(label);
       } else {
         this.hotbarCountLabels[i].setText('');
       }
     }
   }
 
-  /** Draw an item's icon shape, filled with `color`, centered at (cx,cy). */
-  drawIcon(g, shape, cx, cy, size, color) {
+  /**
+   * Draw an item's icon shape, filled with `color`, centered at (cx,cy). `alpha`
+   * (0..1) lets the bar convey state — a potion's fill level, or a mana spell
+   * dimmed when unaffordable.
+   */
+  drawIcon(g, shape, cx, cy, size, color, alpha = 1) {
     const h = size / 2;
-    g.fillStyle(color, 1);
+    g.fillStyle(color, alpha);
     if (shape === 'circle') g.fillCircle(cx, cy, h);
     else if (shape === 'square') g.fillRect(cx - h, cy - h, size, size);
     else if (shape === 'triangle') g.fillTriangle(cx, cy - h, cx + h, cy + h, cx - h, cy + h);
@@ -727,18 +1196,27 @@ export class GameScene extends Phaser.Scene {
         ],
         true
       );
+    } else if (shape === 'bomb') {
+      // Black round bomb with a fuse + spark (ignores `color`; honours alpha).
+      const r = size * 0.34;
+      g.fillStyle(0x111318, alpha);
+      g.fillCircle(cx, cy + size * 0.08, r);
+      g.fillStyle(0x8a6a3a, alpha);
+      g.fillRect(cx - 1, cy - size * 0.42, 2, size * 0.24);
+      g.fillStyle(0xffb020, alpha);
+      g.fillCircle(cx, cy - size * 0.42, size * 0.09);
     } else if (shape === 'scroll') {
       // Parchment scroll with a blue orb (ignores `color`).
       const roll = size * 0.16;
       const inset = size * 0.14;
       const x0 = cx - h;
       const y0 = cy - h;
-      g.fillStyle(0xe6d6a8, 1);
+      g.fillStyle(0xe6d6a8, alpha);
       g.fillRect(x0 + inset, y0 + roll, size - inset * 2, size - roll * 2);
-      g.fillStyle(0xc9b06e, 1);
+      g.fillStyle(0xc9b06e, alpha);
       g.fillRect(x0, y0, size, roll);
       g.fillRect(x0, y0 + size - roll, size, roll);
-      g.fillStyle(0x4db8ff, 1);
+      g.fillStyle(0x4db8ff, alpha);
       g.fillCircle(cx, cy, size * 0.2);
     }
   }
@@ -748,9 +1226,14 @@ export class GameScene extends Phaser.Scene {
   // --------------------------------------------------------------------------
 
   update(time, delta) {
+    if (this.modalOpen) return; // item info dialog up — game is frozen behind it
+
     // When frozen, the simulation halts but order-input (clicks) stays live.
     if (!this.frozen && !this.player.dead) {
       this.gameTime += delta; // timer only advances during un-frozen play
+      if (this.player.shieldTimer > 0) this.player.shieldTimer -= delta;
+      if (this.player.bowDraw > 0) this.player.bowDraw = Math.max(0, this.player.bowDraw - delta / BOW.drawTime);
+      this.tickHotbarCooldowns(delta);
       this.movePlayer(delta);
       this.updateFistsFor(this.player, time, UNIT.radius);
       this.updatePlayerCombat(delta);
@@ -758,6 +1241,9 @@ export class GameScene extends Phaser.Scene {
       this.updateFootsteps(delta);
     }
     if (!this.frozen && !this.player.dead) this.updateEnemies(delta);
+    if (!this.frozen && !this.player.dead) this.updatePixels();
+    if (!this.frozen) this.updateProjectiles(delta);
+    if (!this.frozen) this.updateBombs(delta);
     if (!this.frozen) {
       this.separateEnemies();
       for (const e of this.enemies.getChildren()) {
@@ -777,10 +1263,32 @@ export class GameScene extends Phaser.Scene {
     this.drawSightCones();
     this.drawOverlays();
     this.updateXpUi();
-    this.updateHud();
+    this.updateManaUi();
+    this.drawMenuButton();
     this.updateTimeIndicator();
     this.drawSoundIcon();
+    this.drawMusicIcon();
     this.drawHotbar();
+  }
+
+  /** Draw the bottom-left music-cycle button (♪) + the current track number. */
+  drawMusicIcon() {
+    const g = this.musicIcon;
+    g.clear();
+    const x = 64;
+    const y = this.bottomStripTop() - 20;
+    this.musicRect = { x: x - 6, y: y - 14, w: 42, h: 32 };
+
+    const col = 0xcfe6ff;
+    g.fillStyle(col, 0.9); // two beamed eighth-notes = "music"
+    g.fillEllipse(x + 1, y + 8, 7, 5);
+    g.fillEllipse(x + 13, y + 5, 7, 5);
+    g.fillRect(x + 4, y - 8, 2, 16);
+    g.fillRect(x + 16, y - 11, 2, 16);
+    g.fillRect(x + 4, y - 11, 14, 3); // beam
+
+    const { index, count } = getMusicTrack();
+    this.musicLabel.setPosition(x + 26, y + 1).setText(`${index + 1}/${count}`);
   }
 
   /** Is the given screen point over the bottom-left sound icon? */
@@ -795,7 +1303,7 @@ export class GameScene extends Phaser.Scene {
     g.clear();
 
     const x = 18;
-    const y = this.scale.height - 34;
+    const y = this.bottomStripTop() - 20; // sit above the action bar (mobile-safe)
     this.soundRect = { x: x - 6, y: y - 12, w: 44, h: 30 }; // clickable hit area
 
     const col = 0xcfe6ff;
@@ -855,8 +1363,9 @@ export class GameScene extends Phaser.Scene {
   /** Draw the bottom-right play/pause icon and the mm:ss game timer above it. */
   updateTimeIndicator() {
     const cx = this.scale.width - 42;
-    const cy = this.scale.height - 42;
+    const cy = this.bottomStripTop() - 24; // sit above the action bar (mobile-safe)
     const size = 40;
+    this.freezeRect = { x: cx - 22, y: cy - size / 2 - 6, w: 56, h: size + 12 }; // tap area
 
     const g = this.timeIcon;
     g.clear();
@@ -886,19 +1395,24 @@ export class GameScene extends Phaser.Scene {
   /** Rebuild the scene one level deeper, carrying the player's progression. */
   descend() {
     this.descending = true;
+    cycleMusic(); // fresh background track for the new stage
     const p = this.player;
     this.scene.restart({
       depth: this.depth + 1,
       seed: this.seed,
       gameTime: this.gameTime, // keep the run timer going
       hotbar: this.hotbar, // carry collected items down
+      foundItems: [...this.foundItems], // items already looted stay out of future chests
       player: {
         level: p.level,
         xp: p.xp,
         xpToNext: p.xpToNext,
         maxHp: p.maxHp,
         hp: GAME.healOnDescend ? p.maxHp : p.hp,
+        maxMana: p.maxMana,
+        mana: GAME.healOnDescend ? p.maxMana : p.mana,
         weaponId: p.weapon.id,
+        hasShield: p.hasShield,
       },
     });
   }
@@ -914,6 +1428,13 @@ export class GameScene extends Phaser.Scene {
     const v = owner.body.velocity;
     const moving = Math.hypot(v.x, v.y) > 5;
     if (moving) owner.facing = Math.atan2(v.y, v.x); // face where we're heading
+
+    // While actually shooting, the bow is held in BOTH hands out front. Up close
+    // (usingBow false) it's stowed on the back and the hands punch normally.
+    if (owner === this.player && owner.weapon.id === 'bow' && owner.usingBow) {
+      this.placeBowHands(owner, radius);
+      return;
+    }
 
     const lateral = radius + 4;
 
@@ -945,6 +1466,20 @@ export class GameScene extends Phaser.Scene {
   placeFist(fist, owner, angle, dist) {
     if (fist.punching) return; // its tween owns the position right now
     fist.setPosition(owner.x + Math.cos(angle) * dist, owner.y + Math.sin(angle) * dist);
+  }
+
+  /**
+   * Both hands hold the bow out front: one on the riser, one on the string. The
+   * string hand draws back (p.bowDraw → 1) then releases (→ 0) on each shot.
+   */
+  placeBowHands(p, radius) {
+    const f = p.facing ?? 0;
+    const reach = radius + 7;
+    const bx = p.x + Math.cos(f) * reach; // bow riser — front hand
+    const by = p.y + Math.sin(f) * reach;
+    const pull = (p.bowDraw ?? 0) * 9; // string hand pulls back toward the dot
+    if (!p.fistL.punching) p.fistL.setPosition(bx, by);
+    if (!p.fistR.punching) p.fistR.setPosition(bx - Math.cos(f) * pull, by - Math.sin(f) * pull);
   }
 
   /**
@@ -1000,6 +1535,25 @@ export class GameScene extends Phaser.Scene {
     return true;
   }
 
+  /**
+   * Is enemy `e` currently visible to the player — lit by the fog of war (its
+   * tile is revealed *now*, not just explored) AND within the camera view? The
+   * bow only shoots enemies you can actually see.
+   */
+  enemyVisible(e) {
+    const cx = Math.floor(e.x / this.fogCell);
+    const cy = Math.floor(e.y / this.fogCell);
+    if (!this.visibleCells.has(cy * this.fogW + cx)) return false; // in the fog
+    const cam = this.cameras.main;
+    const m = ENEMY.radius;
+    return (
+      e.x >= cam.scrollX - m &&
+      e.x <= cam.scrollX + cam.width + m &&
+      e.y >= cam.scrollY - m &&
+      e.y <= cam.scrollY + cam.height + m
+    );
+  }
+
   /** Can enemy `e` see the player? Inside its cone (range + angle) with clear sight. */
   enemyCanSee(e, p, d) {
     if (d > ENEMY.sightRange) return false;
@@ -1027,12 +1581,58 @@ export class GameScene extends Phaser.Scene {
     return { x: x + dx * maxDist, y: y + dy * maxDist };
   }
 
+  /** A loop of waypoints just inside a room's walls (clockwise), for patrolling. */
+  roomPatrolPath(room) {
+    const inset = 1; // one tile in from the walls
+    const minX = room.x + inset;
+    const minY = room.y + inset;
+    const maxX = room.x + room.w - 1 - inset;
+    const maxY = room.y + room.h - 1 - inset;
+    const c = (t) => (t + 0.5) * TILE;
+    if (maxX <= minX || maxY <= minY) {
+      const cc = roomCenterTile(room); // room too small → sit in the middle
+      return [{ x: c(cc.tx), y: c(cc.ty) }];
+    }
+    return [
+      { x: c(minX), y: c(minY) },
+      { x: c(maxX), y: c(minY) },
+      { x: c(maxX), y: c(maxY) },
+      { x: c(minX), y: c(maxY) },
+    ];
+  }
+
+  /** Move an idle enemy along its room-wall patrol, facing its heading. */
+  patrolEnemy(e, delta) {
+    const path = e.patrol;
+    if (!path || path.length < 2) {
+      e.facing += e.lookSpeed * (delta / 1000); // nowhere to go → sweep the cone
+      e.setVelocity(0, 0);
+      return;
+    }
+    const wp = path[e.patrolIdx % path.length];
+    const dx = wp.x - e.x;
+    const dy = wp.y - e.y;
+    const d = Math.hypot(dx, dy);
+    if (d < 8) {
+      e.patrolIdx = (e.patrolIdx + 1) % path.length; // reached a corner → next
+      e.setVelocity(0, 0);
+      return;
+    }
+    const speed = e.speed * 0.5; // amble slower than a chase
+    e.facing = Math.atan2(dy, dx); // look where you're walking
+    e.setVelocity((dx / d) * speed, (dy / d) * speed);
+  }
+
   /** Enemy AI: chase the player when seen & in range, punch when adjacent. */
   updateEnemies(delta) {
     const p = this.player;
     for (const e of this.enemies.getChildren()) {
       if (!e.active) continue;
       if (e.attackTimer > 0) e.attackTimer -= delta;
+      if (e.slowTimer > 0) {
+        e.slowTimer -= delta;
+        if (e.slowTimer <= 0) e.setTint(e.baseColor); // Frozen Orb chill wore off
+      }
 
       // Growl once each time it becomes alerted (by sight or by being hit).
       if (e.alerted && !e.announcedAggro) {
@@ -1057,8 +1657,7 @@ export class GameScene extends Phaser.Scene {
         if (this.enemyCanSee(e, p, d)) {
           e.alerted = true;
         } else {
-          e.facing += e.lookSpeed * (delta / 1000); // sweep the cone while idle
-          e.setVelocity(0, 0);
+          this.patrolEnemy(e, delta); // walk the room walls, looking where it goes
           e.attackTarget = null;
           continue;
         }
@@ -1080,7 +1679,8 @@ export class GameScene extends Phaser.Scene {
           e.attackTimer = e.weapon.cooldown;
         }
       } else {
-        e.setVelocity(Math.cos(e.facing) * e.speed, Math.sin(e.facing) * e.speed);
+        const sp = e.slowTimer > 0 ? e.speed * e.slowMult : e.speed; // slowed?
+        e.setVelocity(Math.cos(e.facing) * sp, Math.sin(e.facing) * sp);
         e.attackTarget = null; // fists ride on the sides while chasing
       }
     }
@@ -1093,17 +1693,152 @@ export class GameScene extends Phaser.Scene {
     // Player: HP bar + level label above the dot (XP lives in the top-right UI).
     this.drawHealthBar(this.player, UNIT.radius);
     this.drawFace(this.player, UNIT.radius);
-    this.playerLabel
-      .setPosition(this.player.x, this.player.y - UNIT.radius - 12)
-      .setText(`Lv ${this.player.level}`);
+    this.drawEquipment(this.player);
+    this.drawBowCooldown(this.player);
+    this.drawShieldCooldown(this.player);
+    this.placeLevelNumber(this.playerLabel, this.player, UNIT.radius);
 
-    // Enemies: HP bar + level label + face each.
+    // Enemies: HP bar + level number + face each.
     for (const e of this.enemies.getChildren()) {
       if (!e.active) continue;
       this.drawHealthBar(e, ENEMY.radius);
       this.drawFace(e, ENEMY.radius);
-      e.label.setPosition(e.x, e.y - ENEMY.radius - 12).setText(`Lv ${e.level}`);
+      if (e.slowTimer > 0 && e.slowMult <= 0.6) {
+        // Thin blue ring marks a Frozen-Orb-chilled enemy (not brief fist jabs).
+        this.fx.lineStyle(1.5, FROST.tint, 0.9);
+        this.fx.strokeCircle(e.x, e.y, ENEMY.radius + 4);
+      }
+      this.placeLevelNumber(e.label, e, ENEMY.radius);
     }
+
+    this.drawBowReticle(this.player); // marks the enemy the bow will shoot
+    this.drawBombs(); // burning fuses on dropped bombs
+  }
+
+  /** Draw the equipped bow (arc in front) and/or shield (arc, dim on cooldown). */
+  drawEquipment(p) {
+    const g = this.fx;
+    const f = p.facing ?? 0;
+
+    if (p.weapon.id === 'bow' && !p.usingBow) {
+      // Stowed on the back while punching a point-blank enemy.
+      const back = f + Math.PI;
+      const bx = p.x + Math.cos(back) * (UNIT.radius + 3);
+      const by = p.y + Math.sin(back) * (UNIT.radius + 3);
+      const perp = back + Math.PI / 2;
+      g.lineStyle(2, 0xd8c8a0, 0.75); // wooden limb on the back
+      g.beginPath();
+      g.arc(bx, by, 8, back - Math.PI * 0.5, back + Math.PI * 0.5);
+      g.strokePath();
+      g.lineStyle(1, 0xffffff, 0.5); // slack string across the tips
+      g.beginPath();
+      g.moveTo(bx + Math.cos(perp) * 8, by + Math.sin(perp) * 8);
+      g.lineTo(bx - Math.cos(perp) * 8, by - Math.sin(perp) * 8);
+      g.strokePath();
+    } else if (p.weapon.id === 'bow') {
+      // Bow held out front in both hands, with an animated string.
+      const reach = UNIT.radius + 7;
+      const bx = p.x + Math.cos(f) * reach;
+      const by = p.y + Math.sin(f) * reach;
+      const perp = f + Math.PI / 2;
+      const limb = 10;
+      const tipLx = bx + Math.cos(perp) * limb;
+      const tipLy = by + Math.sin(perp) * limb;
+      const tipRx = bx - Math.cos(perp) * limb;
+      const tipRy = by - Math.sin(perp) * limb;
+      const pull = (p.bowDraw ?? 0) * 9;
+      const nx = bx - Math.cos(f) * pull; // string nock (pulled back while drawn)
+      const ny = by - Math.sin(f) * pull;
+
+      g.lineStyle(2.5, 0xd8c8a0, 0.95); // wooden limbs (arc bulging forward)
+      g.beginPath();
+      g.arc(bx, by, limb, f - Math.PI * 0.5, f + Math.PI * 0.5);
+      g.strokePath();
+
+      g.lineStyle(1, 0xffffff, 0.85); // string: straight at rest, a V when drawn
+      g.beginPath();
+      g.moveTo(tipLx, tipLy);
+      g.lineTo(nx, ny);
+      g.lineTo(tipRx, tipRy);
+      g.strokePath();
+
+      if (p.bowDraw > 0.05) {
+        // A nocked arrow, fading as the string releases.
+        g.lineStyle(2, COLORS.player, 0.9 * p.bowDraw);
+        g.beginPath();
+        g.moveTo(nx, ny);
+        g.lineTo(nx + Math.cos(f) * (limb + 6), ny + Math.sin(f) * (limb + 6));
+        g.strokePath();
+      }
+    }
+
+    if (p.hasShield) {
+      // A shield arc on the dot's left side; dims while recharging.
+      const side = f + Math.PI * 0.5;
+      const sx = p.x + Math.cos(side) * (UNIT.radius + 1);
+      const sy = p.y + Math.sin(side) * (UNIT.radius + 1);
+      const ready = p.shieldTimer <= 0;
+      g.lineStyle(3, 0xbfe3ff, ready ? 0.95 : 0.3);
+      g.beginPath();
+      g.arc(sx, sy, 7, side - Math.PI * 0.6, side + Math.PI * 0.6);
+      g.strokePath();
+    }
+  }
+
+  /** A white "reloading" bar under the dot while the bow's shot recharges. */
+  drawBowCooldown(p) {
+    if (p.weapon.id !== 'bow' || p.attackTimer <= 0) return;
+    const max = p.attackCooldownMax || p.weapon.cooldown;
+    const prog = clamp(1 - p.attackTimer / max, 0, 1); // 0 just-fired → 1 ready
+    this.drawCooldownBar(p, prog, 0xffffff, 6);
+  }
+
+  /** A blue recharge bar under the dot while the shield is on its block cooldown. */
+  drawShieldCooldown(p) {
+    if (!p.hasShield || p.shieldTimer <= 0) return;
+    const prog = clamp(1 - p.shieldTimer / SHIELD.blockCooldown, 0, 1);
+    // Sit below the bow bar if both are showing.
+    const offset = p.weapon.id === 'bow' ? 12 : 6;
+    this.drawCooldownBar(p, prog, 0xbfe3ff, offset);
+  }
+
+  /** A small progress bar under the dot (`prog` 0..1) at vertical `offset`. */
+  drawCooldownBar(p, prog, color, offset) {
+    const w = UNIT.radius * 2;
+    const h = 3;
+    const x = p.x - w / 2;
+    const y = p.y + UNIT.radius + offset;
+    const g = this.fx;
+    g.fillStyle(0x000000, 0.5);
+    g.fillRect(x - 1, y - 1, w + 2, h + 2);
+    g.fillStyle(color, 0.95);
+    g.fillRect(x, y, w * prog, h);
+  }
+
+  /** Draw a crosshair reticle on the enemy the equipped bow will fire at. */
+  drawBowReticle(p) {
+    if (!p.usingBow) return; // only while actually shooting (not point-blank fists)
+    const t = p.attackTarget;
+    if (!t || !t.active) return;
+    const g = this.fx;
+    const r = ENEMY.radius + 7;
+    g.lineStyle(1.5, COLORS.player, 0.9);
+    g.strokeCircle(t.x, t.y, r);
+    g.beginPath();
+    for (const a of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) {
+      g.moveTo(t.x + Math.cos(a) * (r - 4), t.y + Math.sin(a) * (r - 4));
+      g.lineTo(t.x + Math.cos(a) * (r + 4), t.y + Math.sin(a) * (r + 4));
+    }
+    g.strokePath();
+  }
+
+  /** Put a character's level number on its body, toward the back (behind the face). */
+  placeLevelNumber(label, entity, radius) {
+    const f = entity.facing ?? 0;
+    const back = radius * 0.38;
+    label
+      .setPosition(entity.x - Math.cos(f) * back, entity.y - Math.sin(f) * back)
+      .setText(`${entity.level}`);
   }
 
   /** Draw two little dark eyes on `entity`, looking in its facing direction. */
@@ -1145,14 +1880,39 @@ export class GameScene extends Phaser.Scene {
     const barW = 170;
     const barH = 10;
     const x = this.scale.width - margin - barW;
-    const yBar = 40;
+    const right = this.scale.width - margin;
+    const yBar = 62; // XP bar pushed down to make room for the Stage line
 
-    this.levelText.setPosition(this.scale.width - margin, 12).setText(`Level ${p.level}`);
+    this.stageText.setPosition(right, 10).setText(`Stage ${this.depth}`); // dungeon depth
+    this.levelText.setPosition(right, 38).setText(`Level ${p.level}`); // character level
     this.xpBarBg.setPosition(x, yBar);
     this.xpBarFill.setPosition(x, yBar).setDisplaySize(barW * clamp(p.xp / p.xpToNext, 0, 1), barH);
-    this.xpText
+    this.xpText.setPosition(right, yBar + barH + 3).setText(`${p.xp} / ${p.xpToNext} XP`);
+  }
+
+  /**
+   * Position + fill the blue mana bar under the XP readout. Hidden entirely
+   * unless the player holds a mana-cost item (it's the item that "reveals" it).
+   */
+  updateManaUi() {
+    const show = this.hasManaItem();
+    this.manaBarBg.setVisible(show);
+    this.manaBarFill.setVisible(show);
+    this.manaText.setVisible(show);
+    if (!show) return;
+
+    const p = this.player;
+    const margin = 14;
+    const barW = 170;
+    const barH = 8;
+    const x = this.scale.width - margin - barW;
+    const yBar = 100; // just below the XP bar (62) + its value text
+
+    this.manaBarBg.setPosition(x, yBar);
+    this.manaBarFill.setPosition(x, yBar).setDisplaySize(barW * clamp(p.mana / p.maxMana, 0, 1), barH);
+    this.manaText
       .setPosition(this.scale.width - margin, yBar + barH + 3)
-      .setText(`${p.xp} / ${p.xpToNext} XP`);
+      .setText(`${Math.round(p.mana)} / ${p.maxMana} MP`);
   }
 
   /**
@@ -1248,21 +2008,40 @@ export class GameScene extends Phaser.Scene {
     const p = this.player;
     if (p.attackTimer > 0) p.attackTimer -= delta;
 
-    // A clicked (focus) enemy in range takes priority; otherwise auto-target
-    // the nearest enemy in the front-facing arc.
+    // Choose the weapon to actually use this frame. A bow only shoots enemies
+    // that are on-screen and out of the fog; it can't fire point-blank, so when
+    // the nearest visible foe is closer than BOW.minRange the dot punches instead.
+    let weapon = p.weapon;
+    if (p.weapon.id === 'bow') {
+      const nearest = this.nearestEnemyInArc(p, p.weapon.range, p.facing, Math.PI, true);
+      if (nearest && dist(p.x, p.y, nearest.x, nearest.y) < BOW.minRange) weapon = getWeapon('fists');
+    }
+    const ranged = weapon.kind === 'ranged';
+    p.usingBow = ranged; // true only while actually shooting (drives reticle)
+
+    // A clicked (focus) enemy in range takes priority; otherwise auto-target the
+    // nearest enemy (all-around + visible for the bow, front-arc for melee).
     let target = null;
     const f = p.focusEnemy;
-    if (f && f.active && dist(p.x, p.y, f.x, f.y) <= p.weapon.range) {
+    const focusVisible = ranged ? f && this.enemyVisible(f) : true;
+    if (f && f.active && dist(p.x, p.y, f.x, f.y) <= weapon.range && focusVisible) {
       target = f;
-      p.facing = angleBetween(p.x, p.y, f.x, f.y); // face it so the fists box it
     } else {
-      target = this.nearestEnemyInArc(p, p.weapon.range, p.facing, UNIT.attackArc);
+      const arc = ranged ? Math.PI : UNIT.attackArc; // PI = any direction
+      target = this.nearestEnemyInArc(p, weapon.range, p.facing, arc, ranged);
     }
 
-    p.attackTarget = target || null; // drives fist orientation while boxing
+    // Turn to aim at the target (so fists box it / the bow + arrow point at it).
+    if (target && (ranged || target === f)) {
+      p.facing = angleBetween(p.x, p.y, target.x, target.y);
+    }
+
+    p.attackTarget = target || null; // drives fist orientation + bow reticle
     if (target && p.attackTimer <= 0) {
-      p.weapon.attack({ scene: this, owner: p, target });
-      p.attackTimer = p.weapon.cooldown;
+      weapon.attack({ scene: this, owner: p, target });
+      p.attackTimer = weapon.cooldown;
+      p.attackCooldownMax = weapon.cooldown;
+      if (ranged) p.bowDraw = 1; // kick off the string/hand release animation
     }
   }
 
@@ -1270,7 +2049,7 @@ export class GameScene extends Phaser.Scene {
    * Nearest active enemy within `range` and within `halfArc` of `facing`
    * (center-to-center), or null. A halfArc of PI means "any direction".
    */
-  nearestEnemyInArc(from, range, facing, halfArc) {
+  nearestEnemyInArc(from, range, facing, halfArc, requireVisible = false) {
     let best = null;
     let bestDist = range;
     for (const e of this.enemies.getChildren()) {
@@ -1279,6 +2058,7 @@ export class GameScene extends Phaser.Scene {
       if (d > bestDist) continue;
       const toEnemy = angleBetween(from.x, from.y, e.x, e.y);
       if (Math.abs(angleDelta(facing, toEnemy)) > halfArc) continue; // not facing it
+      if (requireVisible && !this.enemyVisible(e)) continue; // fogged / off-screen
       bestDist = d;
       best = e;
     }
@@ -1303,10 +2083,68 @@ export class GameScene extends Phaser.Scene {
     if (killed) {
       if (target.faction === 'enemy') {
         this.grantXp(target.level);
-        if (Math.random() < 0.18) this.createPickup(tx, ty, 'frost'); // random scroll drop
+        this.dropPixels(tx, ty);
       }
     } else {
       this.flashHit(target);
+    }
+  }
+
+  /**
+   * On a kill, maybe drop resource pixels — but only the kinds the player can
+   * actually use: a red HP pixel needs a held potion, a blue mana pixel needs a
+   * held mana item. This is how holding the item "unlocks" collecting them.
+   */
+  dropPixels(x, y) {
+    if (this.heldPotionSlot() && Math.random() < POTION.dropChance) this.createPixel(x, y, 'hp');
+    if (this.hasManaItem() && Math.random() < MANA.dropChance) this.createPixel(x, y, 'mana');
+  }
+
+  /** Spawn a little resource pixel that scatters near (x,y) and bobs in place. */
+  createPixel(x, y, type) {
+    const color = type === 'mana' ? COLORS.manaPixel : COLORS.hpPixel;
+    const ox = (Math.random() - 0.5) * 2 * PIXEL.scatter;
+    const oy = (Math.random() - 0.5) * 2 * PIXEL.scatter;
+    const px = this.physics.add.sprite(x + ox, y + oy, 'pixel').setTint(color).setDepth(0);
+    px.pixelType = type;
+    // (No bob tween — it fought the magnet's velocity and cancelled the vertical
+    // pull. Idle pixels sit still; updatePixels() floats them to the dot when near.)
+    this.pixels.add(px);
+    return px;
+  }
+
+  /** Collect a pixel: red refills the held potion, blue refills mana. */
+  collectPixel(px) {
+    const p = this.player;
+    if (px.pixelType === 'mana') {
+      p.mana = Math.min(p.maxMana, p.mana + randInt(Math.random, MANA.restoreMin, MANA.restoreMax));
+    } else {
+      const slot = this.heldPotionSlot();
+      if (slot) {
+        const cap = getItem(slot.id).capacity;
+        slot.charge = Math.min(cap, slot.charge + randInt(Math.random, POTION.refillMin, POTION.refillMax));
+      }
+    }
+    this.tweens.killTweensOf(px);
+    px.destroy();
+  }
+
+  /**
+   * Magnet nearby pixels toward the dot each frame so collection feels good
+   * (physics overlap still does the actual pickup on contact).
+   */
+  updatePixels() {
+    const p = this.player;
+    for (const px of this.pixels.getChildren()) {
+      if (!px.active) continue;
+      const dx = p.x - px.x;
+      const dy = p.y - px.y;
+      const d = Math.hypot(dx, dy);
+      if (d > 0 && d < PIXEL.magnetRange) {
+        px.setVelocity((dx / d) * PIXEL.magnetSpeed, (dy / d) * PIXEL.magnetSpeed);
+      } else {
+        px.setVelocity(0, 0);
+      }
     }
   }
 
@@ -1362,7 +2200,10 @@ export class GameScene extends Phaser.Scene {
     p.level += 1;
     p.xpToNext = p.level * 10; // 10, 20, 30, …
     p.maxHp += 2;
-    p.hp = p.maxHp; // reward: refill on level-up
+    // Partial refill on level-up — 20% of max HP and mana (the ONLY time HP heals).
+    p.hp = Math.min(p.maxHp, p.hp + p.maxHp * LEVELUP.replenishFraction);
+    p.mana = Math.min(p.maxMana, p.mana + p.maxMana * LEVELUP.replenishFraction);
+    playLevelUp();
     this.showSwingPulse(p); // quick visual pop
   }
 
@@ -1370,6 +2211,15 @@ export class GameScene extends Phaser.Scene {
   damagePlayer(amount) {
     const p = this.player;
     if (p.dead) return true;
+
+    // Shield: fully absorb one hit, then recharge before it can block again.
+    if (p.hasShield && p.shieldTimer <= 0) {
+      p.shieldTimer = SHIELD.blockCooldown;
+      playBlock();
+      this.showDamageNumber(p.x, p.y, 'block', '#bfe3ff');
+      return false;
+    }
+
     const defense = p.weapon.defense ?? 0;
     const taken = amount * (1 - defense);
     p.hp -= taken;
@@ -1446,6 +2296,146 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  /**
+   * Fire a projectile (weapons.js calls this). Hits enemies if the player fired
+   * it, the player if an enemy did. `opts.speedMult`/`damageMult`/`pierce` come
+   * from a weapon's special shot.
+   */
+  spawnProjectile(owner, angle, weapon, opts = {}) {
+    const speed = (weapon.projectileSpeed ?? 300) * (opts.speedMult ?? 1);
+    const damage = weapon.damage * (opts.damageMult ?? 1);
+    const color = owner.faction === 'player' ? COLORS.player : COLORS.enemyMelee;
+    const d0 = UNIT.radius + 6; // spawn just outside the shooter
+    const proj = new Projectile(
+      this,
+      owner.x + Math.cos(angle) * d0,
+      owner.y + Math.sin(angle) * d0,
+      angle,
+      { faction: owner.faction, damage, pierce: !!opts.pierce, speed, color }
+    );
+    this.projectiles.add(proj);
+    // Set velocity AFTER adding so nothing can zero it — the arrow flies along
+    // its aim vector toward the target.
+    proj.body.setVelocity(Math.cos(angle) * speed, Math.sin(angle) * speed);
+    if (owner.faction === 'player') playArrow(); // "fffft"
+    return proj;
+  }
+
+  /** Fly projectiles: fizzle on walls/lifespan, damage the first target hit. */
+  updateProjectiles(delta) {
+    for (const pr of this.projectiles.getChildren().slice()) {
+      if (!pr.active) continue;
+      pr.life -= delta;
+
+      // Fizzle on lifespan or when it enters a wall tile.
+      const tx = Math.floor(pr.x / TILE);
+      const ty = Math.floor(pr.y / TILE);
+      const row = this.level.grid[ty];
+      if (pr.life <= 0 || !row || row[tx] === WALL) {
+        pr.destroy();
+        continue;
+      }
+
+      if (pr.faction === 'player') {
+        for (const e of this.enemies.getChildren()) {
+          if (!e.active || pr.hitTargets.has(e)) continue;
+          if (dist(pr.x, pr.y, e.x, e.y) <= ENEMY.radius + PROJECTILE.radius) {
+            this.dealDamage(e, pr.damage);
+            pr.hitTargets.add(e);
+            if (pr.faction === 'player') playPunch(); // the usual impact sound
+            if (!pr.pierce) {
+              pr.destroy();
+              break;
+            }
+          }
+        }
+      } else {
+        const p = this.player;
+        if (!p.dead && dist(pr.x, pr.y, p.x, p.y) <= UNIT.radius + PROJECTILE.radius) {
+          p.takeDamage(pr.damage);
+          if (!pr.pierce) pr.destroy();
+        }
+      }
+    }
+  }
+
+  /** Drop a ticking bomb at (x,y). Only one may be live at a time. */
+  placeBomb(x, y) {
+    if (this.bombs.length > 0) return; // one bomb at a time
+    const sprite = this.add.image(x, y, 'bomb_body').setScale(1.6).setDepth(1);
+    this.bombs.push({ sprite, fuse: BOMB.fuse });
+  }
+
+  /** Tick dropped-bomb fuses; detonate at 0. (The burning fuse is drawn separately.) */
+  updateBombs(delta) {
+    for (let i = this.bombs.length - 1; i >= 0; i--) {
+      const b = this.bombs[i];
+      b.fuse -= delta;
+      if (b.fuse <= 0) {
+        this.explodeBomb(b);
+        this.bombs.splice(i, 1);
+      }
+    }
+  }
+
+  /** Draw each dropped bomb's shrinking fuse with a flickering flame at the tip. */
+  drawBombs() {
+    const g = this.fx;
+    const now = this.time.now;
+    for (const b of this.bombs) {
+      const bx = b.sprite.x;
+      const by = b.sprite.y;
+      const S = 1.6; // bomb sprite scale
+      const bodyTop = by - 5 * S; // fuse enters the body here
+      const fuseTop = by - 13 * S; // lit end at drop time
+      const t = clamp(1 - b.fuse / BOMB.fuse, 0, 1); // 0 fresh → 1 boom
+      const flameY = fuseTop + t * (bodyTop - fuseTop); // burn point descends
+
+      // Remaining (unburnt) fuse: flame → body.
+      g.lineStyle(2, 0x8a6a3a, 1);
+      g.beginPath();
+      g.moveTo(bx, flameY);
+      g.lineTo(bx, bodyTop);
+      g.strokePath();
+
+      // Flickering flame at the burn point.
+      const flick = 1 + Math.sin(now * 0.04 + bx * 0.3) * 0.35;
+      g.fillStyle(0xff8a2a, 0.9);
+      g.fillCircle(bx, flameY, 3.6 * flick);
+      g.fillStyle(0xffe08a, 0.95);
+      g.fillCircle(bx, flameY - 1, 1.9 * flick);
+    }
+  }
+
+  /** Detonate a dropped bomb: blast ring, AoE damage, and a boom. */
+  explodeBomb(b) {
+    const { x, y } = b.sprite;
+    b.sprite.destroy();
+    this.blastEffect(x, y, BOMB.radius, 0xffab3d);
+    for (const e of this.enemies.getChildren()) {
+      if (e.active && dist(e.x, e.y, x, y) <= BOMB.radius) this.dealDamage(e, BOMB.damage);
+    }
+    playExplosion();
+  }
+
+  /**
+   * Slow an enemy: a stronger slow (lower mult) or a fresh one wins — a weak
+   * jab never overrides an active Frozen-Orb chill. Extends the slow timer.
+   */
+  applySlow(e, mult, duration) {
+    if (e.slowTimer <= 0 || mult < e.slowMult) e.slowMult = mult;
+    e.slowTimer = Math.max(e.slowTimer, duration);
+  }
+
+  /** A landed fists punch briefly slows an enemy and shoves it back a hair. */
+  fistImpact(target, attacker) {
+    if (!target || !target.active || target.faction !== 'enemy') return;
+    this.applySlow(target, FISTS.slowMult, FISTS.slowDuration);
+    const a = angleBetween(attacker.x, attacker.y, target.x, target.y);
+    target.x += Math.cos(a) * FISTS.knockback;
+    target.y += Math.sin(a) * FISTS.knockback;
+  }
+
   /** Brief white flash on a hit target, then restore its colour. */
   flashHit(target) {
     target.setTint(0xffffff);
@@ -1481,13 +2471,6 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
-  updateHud() {
-    const p = this.player;
-    this.hudText.setText(
-      `Depth ${this.depth}   HP ${Math.ceil(p.hp)}/${p.maxHp}   ` +
-        `Weapon ${p.weapon.name}   Enemies ${this.enemies.countActive(true)}`
-    );
-  }
 }
 
 // ============================================================================
@@ -1497,6 +2480,11 @@ export class GameScene extends Phaser.Scene {
 /** Format an integer colour as a CSS hex string (e.g. 0x3ad0ff → "#3ad0ff"). */
 function hexColor(int) {
   return '#' + int.toString(16).padStart(6, '0');
+}
+
+/** Is tile (tx,ty) inside room `r` (tile-space {x,y,w,h})? */
+function tileInRoom(tx, ty, r) {
+  return tx >= r.x && tx < r.x + r.w && ty >= r.y && ty < r.y + r.h;
 }
 
 /**

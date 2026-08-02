@@ -8,9 +8,13 @@
 - **Side-fists:** two darker dots (`COLORS.playerFist`) ride on the dot's sides,
   wiggle while moving, and hold toward the enemy while boxing. An attack thrusts
   one fist at the target (alternating).
-- **Health bar** + `Lv N` label float above the dot. HP starts 10/10.
+- **Health bar** floats above the dot; the dot's **level number is drawn on its
+  body**. HP starts 10/10.
 - Stats & combat live on the sprite (weapon, XP, focus target, move target).
   See [gameplay.md](gameplay.md) for combat/progression.
+- **Equipment:** a chest **Bow** (weapon + arrows + reticle) and/or **Shield**
+  (blocks one hit / 3 s) equip on pickup and draw on the dot — see
+  [items.md](items.md).
 
 ## Enemies ✅ (`entities/Enemy.js`)
 
@@ -18,8 +22,8 @@
   same footprint as the dot). The `shapes.js` registry already supports
   triangle/diamond for future types.
 - **Level & HP:** each enemy has a `level` (= `randInt(1, depth)`); **HP =
-  `level × ENEMY.hpPerLevel` = level × 2**. Own health bar + `Lv N` label + a
-  face + side-fists (darker shade of its colour).
+  `level × ENEMY.hpPerLevel` = level × 2**. Own health bar, its **level number
+  drawn on its body**, a face + side-fists (darker shade of its colour).
 - **Weapon:** Fists (1 damage), same punch visuals as the player.
 - **Spawns:** every non-start room gets `randInt(1, 2 + depth)` enemies, minus
   any within the safe radius of the start.
@@ -29,6 +33,9 @@
 - Each un-alerted enemy has a **sight cone**: `ENEMY.sightRange = 200` px long,
   `ENEMY.viewAngle = ±45°` (a 90° cone). Idle enemies slowly **sweep** the cone
   (`ENEMY.lookSpeed = 0.7` rad/s).
+- While **un-alerted**, an enemy **patrols its room** — ambling (½ speed) around
+  a loop of waypoints just inside the room's walls, facing (and looking) where it
+  walks. Tiny rooms fall back to sweeping the cone in place.
 - An enemy becomes **alerted** only when the player is inside the cone (range +
   angle) **and** in clear line of sight (no wall between), **or** when it takes
   damage (hit from anywhere wakes it).
@@ -46,3 +53,13 @@
 - **Corpses:** a killed enemy is **not removed** — it becomes a greyed, faded,
   inert corpse beneath the living (no AI/collision/HUD/fists), but the kill
   still grants XP and can drop loot.
+
+## Projectiles ✅ (`entities/Projectile.js`)
+
+- Arrows/bolts fired by ranged weapons (the player's Bow today). A projectile is
+  a light Arcade sprite carrying **faction / damage / pierce / lifespan**; it
+  flies under velocity while `GameScene.updateProjectiles()` handles collision.
+- **Hits:** a player projectile damages the first **enemy** it touches; an enemy
+  projectile damages the **player**. It **fizzles on walls** or after
+  `PROJECTILE.lifespan`. `pierce` shots pass through (one hit per target).
+- Spawned via `scene.spawnProjectile(owner, angle, weapon, opts)`.
