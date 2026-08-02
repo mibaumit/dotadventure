@@ -11,14 +11,31 @@ let master = null;
 let noise = null;
 let music = null;
 
+// Master volume, cycled by the on-screen sound icon (full → half → mute).
+const VOLUME_LEVELS = [0.6, 0.3, 0];
+let volIndex = 0;
+
 /** Create the AudioContext + master bus (called on the first user gesture). */
 function init() {
   if (ctx) return;
   const AC = window.AudioContext || window.webkitAudioContext;
   ctx = new AC();
   master = ctx.createGain();
-  master.gain.value = 0.6;
+  master.gain.value = VOLUME_LEVELS[volIndex];
   master.connect(ctx.destination);
+}
+
+/** Current volume state, for the UI icon. */
+export function getVolume() {
+  const v = VOLUME_LEVELS[volIndex];
+  return { volume: v, muted: v === 0, index: volIndex, count: VOLUME_LEVELS.length };
+}
+
+/** Step to the next volume level (wraps). Returns the new state. */
+export function cycleVolume() {
+  volIndex = (volIndex + 1) % VOLUME_LEVELS.length;
+  if (master) master.gain.value = VOLUME_LEVELS[volIndex];
+  return getVolume();
 }
 
 /** Start audio (must run inside a user-gesture handler) and kick off music. */
@@ -87,20 +104,50 @@ export function playPunch() {
   osc.stop(t + 0.16);
 }
 
-/** A slow, evolving ambient dungeon drone (starts once, loops forever). */
+// A soft-clip distortion curve for the string instrument (built once).
+let distCurve = null;
+function getDistCurve() {
+  if (distCurve) return distCurve;
+  const n = 2048;
+  const k = 15; // drive amount
+  const deg = Math.PI / 180;
+  distCurve = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const x = (i / (n - 1)) * 2 - 1;
+    distCurve[i] = ((3 + k) * x * 20 * deg) / (Math.PI + k * Math.abs(x));
+  }
+  return distCurve;
+}
+
+/**
+ * Ambient dungeon score (starts once, loops forever): a dark drone pad, plus a
+ * distorted string ensemble playing a looping minor-key melody — Diablo-ish.
+ */
 function startMusic() {
   if (!ctx || music) return;
+
   const out = ctx.createGain();
   out.gain.value = 0.0001;
-  out.gain.linearRampToValueAtTime(0.1, ctx.currentTime + 4); // fade in
+  out.gain.linearRampToValueAtTime(0.45, ctx.currentTime + 4); // fade in
   out.connect(master);
 
+  // Shared feedback delay → cavernous echo.
+  const delay = ctx.createDelay(1.0);
+  delay.delayTime.value = 0.38;
+  const feedback = ctx.createGain();
+  feedback.gain.value = 0.33;
+  delay.connect(feedback).connect(delay);
+  delay.connect(out);
+
+  // --- Dark drone pad (kept low so the melody sits on top) ---
+  const droneGain = ctx.createGain();
+  droneGain.gain.value = 0.5;
+  droneGain.connect(out);
   const filter = ctx.createBiquadFilter();
   filter.type = 'lowpass';
   filter.frequency.value = 420;
-  filter.connect(out);
+  filter.connect(droneGain);
 
-  // Two detuned low saws + a sub sine → a dark pad.
   const o1 = ctx.createOscillator();
   o1.type = 'sawtooth';
   o1.frequency.value = 55; // A1
@@ -115,13 +162,79 @@ function startMusic() {
   o2.connect(filter);
   o3.connect(filter);
 
-  // Slow LFO sweeps the filter so the drone breathes.
   const lfo = ctx.createOscillator();
   lfo.frequency.value = 0.045;
   const lfoGain = ctx.createGain();
   lfoGain.gain.value = 220;
   lfo.connect(lfoGain).connect(filter.frequency);
-
   [o1, o2, o3, lfo].forEach((o) => o.start());
-  music = { out, filter, o1, o2, o3, lfo };
+
+  music = { out, filter, delay, feedback, o1, o2, o3, lfo, melodyTimer: null };
+
+  // --- Distorted string melody (A-minor), self-looping ---
+  const beat = 520; // ms per beat (slow, mournful)
+  const MELODY = [
+    [220.0, 2], [261.63, 1], [293.66, 1],
+    [329.63, 2], [293.66, 1], [261.63, 1],
+    [220.0, 3], [null, 1],
+    [246.94, 2], [220.0, 1], [196.0, 1],
+    [220.0, 4], [null, 2],
+  ];
+  let step = 0;
+  const playStep = () => {
+    const [freq, beats] = MELODY[step];
+    if (freq) playStringNote(freq, (beats * beat) / 1000 * 0.92, out, delay);
+    step = (step + 1) % MELODY.length;
+    music.melodyTimer = setTimeout(playStep, beats * beat);
+  };
+  music.melodyTimer = setTimeout(playStep, 1800);
+}
+
+/** A bowed, distorted string note: two detuned saws + vibrato → waveshaper. */
+function playStringNote(freq, dur, out, delay) {
+  const t = ctx.currentTime;
+  const s1 = ctx.createOscillator();
+  s1.type = 'sawtooth';
+  s1.frequency.value = freq;
+  s1.detune.value = -7;
+  const s2 = ctx.createOscillator();
+  s2.type = 'sawtooth';
+  s2.frequency.value = freq;
+  s2.detune.value = 7;
+
+  // Vibrato on both voices.
+  const vib = ctx.createOscillator();
+  vib.frequency.value = 5.2;
+  const vibAmt = ctx.createGain();
+  vibAmt.gain.value = 5;
+  vib.connect(vibAmt);
+  vibAmt.connect(s1.detune);
+  vibAmt.connect(s2.detune);
+
+  // Bowed envelope: soft attack, sustain, release.
+  const env = ctx.createGain();
+  env.gain.setValueAtTime(0.0001, t);
+  env.gain.exponentialRampToValueAtTime(0.5, t + 0.09);
+  env.gain.setValueAtTime(0.5, t + Math.max(0.12, dur - 0.25));
+  env.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+
+  const lp = ctx.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.frequency.value = 2000;
+
+  const shaper = ctx.createWaveShaper();
+  shaper.curve = getDistCurve();
+  shaper.oversample = '2x';
+
+  const lvl = ctx.createGain();
+  lvl.gain.value = 0.5;
+
+  s1.connect(env);
+  s2.connect(env);
+  env.connect(lp).connect(shaper).connect(lvl);
+  lvl.connect(out); // dry
+  lvl.connect(delay); // echo send
+
+  [s1, s2, vib].forEach((o) => o.start(t));
+  [s1, s2, vib].forEach((o) => o.stop(t + dur + 0.05));
 }

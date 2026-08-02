@@ -14,7 +14,7 @@ import { makeShapeTexture, shapeTextureKey } from '../shapes.js';
 import { makeRng, randInt, dist, angleDelta, angleBetween, clamp } from '../util.js';
 import { Enemy } from '../entities/Enemy.js';
 import { getWeapon } from '../weapons.js';
-import { ensureStarted, playFootstep, playPunch } from '../sound.js';
+import { ensureStarted, playFootstep, playPunch, cycleVolume, getVolume } from '../sound.js';
 
 export class GameScene extends Phaser.Scene {
   constructor() {
@@ -230,6 +230,11 @@ export class GameScene extends Phaser.Scene {
     // Left-click: an enemy → chase & attack it; the ground → walk there.
     // (WASD overrides either.)
     this.input.on('pointerdown', (pointer) => {
+      // Clicking the sound icon cycles volume and consumes the click.
+      if (this.overSoundIcon(pointer.x, pointer.y)) {
+        cycleVolume();
+        return;
+      }
       if (this.player.dead) return;
       if (!pointer.leftButtonDown()) return;
 
@@ -362,6 +367,10 @@ export class GameScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setDepth(101);
 
+    // Bottom-left: clickable sound icon (cycles volume: full → half → mute).
+    this.soundIcon = this.add.graphics().setScrollFactor(0).setDepth(100);
+    this.soundRect = { x: 0, y: 0, w: 0, h: 0 };
+
     // Bottom-right: game timer above a big play/pause (time-freeze) indicator.
     this.timeIcon = this.add.graphics().setScrollFactor(0).setDepth(100);
     this.timerText = this.add
@@ -398,6 +407,50 @@ export class GameScene extends Phaser.Scene {
     this.updateXpUi();
     this.updateHud();
     this.updateTimeIndicator();
+    this.drawSoundIcon();
+  }
+
+  /** Is the given screen point over the bottom-left sound icon? */
+  overSoundIcon(sx, sy) {
+    const r = this.soundRect;
+    return sx >= r.x && sx <= r.x + r.w && sy >= r.y && sy <= r.y + r.h;
+  }
+
+  /** Draw the bottom-left speaker icon reflecting the current volume state. */
+  drawSoundIcon() {
+    const g = this.soundIcon;
+    g.clear();
+
+    const x = 18;
+    const y = this.scale.height - 34;
+    this.soundRect = { x: x - 6, y: y - 12, w: 44, h: 30 }; // clickable hit area
+
+    const col = 0xcfe6ff;
+    // Speaker body (small box) + cone (triangle).
+    g.fillStyle(col, 0.9);
+    g.fillRect(x, y - 4, 6, 12);
+    g.fillTriangle(x + 6, y - 8, x + 6, y + 12, x + 16, y + 2);
+
+    const st = getVolume();
+    if (st.muted) {
+      // Red X to the right of the speaker.
+      g.lineStyle(2, 0xff6b6b, 0.95);
+      g.beginPath();
+      g.moveTo(x + 21, y - 5);
+      g.lineTo(x + 31, y + 9);
+      g.moveTo(x + 31, y - 5);
+      g.lineTo(x + 21, y + 9);
+      g.strokePath();
+    } else {
+      // One or two "sound waves" depending on level.
+      const waves = st.volume > 0.4 ? 2 : 1;
+      g.lineStyle(2, col, 0.9);
+      for (let i = 0; i < waves; i++) {
+        g.beginPath();
+        g.arc(x + 16, y + 2, 6 + i * 5, -Math.PI / 4, Math.PI / 4);
+        g.strokePath();
+      }
+    }
   }
 
   /**

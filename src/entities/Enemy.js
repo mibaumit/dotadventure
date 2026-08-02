@@ -67,6 +67,7 @@ export class Enemy extends Phaser.Physics.Arcade.Sprite {
 
   /** Apply damage; turn into a corpse when depleted. Returns true if it died. */
   takeDamage(amount) {
+    this.alerted = true; // being hit always wakes it up (even from behind)
     this.hp -= amount;
     if (this.hp <= 0) {
       this.die();
