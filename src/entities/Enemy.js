@@ -37,9 +37,10 @@ export class Enemy extends Phaser.Physics.Arcade.Sprite {
     this.speed = ENEMY.speedMelee;
     this.attackTimer = 0;
     this.attackTarget = null; // the player while punching (fists face it)
-    this.alerted = false; // has it seen the player yet? (line-of-sight)
+    this.alerted = false; // has it seen the player yet? (sight cone)
     this.punchToggle = false; // alternates which side-fist punches
-    this.facing = 0;
+    this.facing = ((x * 7 + y * 13) % 628) / 100; // varied initial look direction
+    this.lookSpeed = ENEMY.lookSpeed * ((x + y) % 2 ? 1 : -1); // sweep dir varies
     this.wigPhase = (x + y) % 7; // desync the fist wiggle between enemies
     // Punch by thrusting one of its own side-fists (same as the player).
     this.startSwing = (angle, scale = 1) => scene.punchSideFist(this, angle, scale);

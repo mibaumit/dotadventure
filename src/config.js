@@ -41,7 +41,10 @@ export const ENEMY = {
   speedMelee: 112,
   speedArcher: 96,
   hpPerLevel: 2, // an enemy's HP = level * hpPerLevel (level-1 enemy = 2 HP)
-  aggroRange: 340, // distance at which an enemy notices the squad
+  aggroRange: 340, // how far an alerted enemy will keep chasing before giving up
+  sightRange: 200, // sight-cone length: how far an enemy can actually see
+  viewAngle: Math.PI / 4, // sight-cone half-angle (~45° → a 90° cone)
+  lookSpeed: 0.7, // rad/sec an idle enemy sweeps its cone
 };
 
 export const FORMATION = {

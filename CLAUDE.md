@@ -27,13 +27,17 @@ Tauri/Electron later — keep the code wrapper-friendly).
 - **Engine:** [Phaser 4](https://phaser.io) (v4.1.0), loaded from CDN — **no build step**.
 - **Language:** plain JavaScript, **ES modules** (`import`/`export`).
 - **Physics:** Phaser Arcade physics (circle bodies, static wall colliders).
-- **Dev server:** any static server. Python is preinstalled here:
+- **Dev server:** `serve.py` — a tiny **no-cache** threading static server, so
+  edits are never served stale (plain caching can serve an old `config.js`):
   ```
   cd E:\workspace\DotAdventure
-  python -m http.server 8080
+  python serve.py            # → http://localhost:8080
   ```
-  Then open http://localhost:8080 . (A local server is required because ES modules
-  don't load over `file://`.)
+  Any static server works (e.g. `python -m http.server 8080`), but may cache
+  modules between edits. A local server is required because ES modules don't
+  load over `file://`.
+- **Audio:** synthesized at runtime via the Web Audio API (`src/sound.js`) — no
+  asset files. Starts on the first click/keypress (browser autoplay policy).
 
 ---
 

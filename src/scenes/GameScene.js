@@ -14,6 +14,7 @@ import { makeShapeTexture, shapeTextureKey } from '../shapes.js';
 import { makeRng, randInt, dist, angleDelta, angleBetween, clamp } from '../util.js';
 import { Enemy } from '../entities/Enemy.js';
 import { getWeapon } from '../weapons.js';
+import { ensureStarted, playFootstep, playPunch } from '../sound.js';
 
 export class GameScene extends Phaser.Scene {
   constructor() {
@@ -28,6 +29,7 @@ export class GameScene extends Phaser.Scene {
     this.descending = false; // guards the descend trigger
     this.gameTime = data?.gameTime ?? 0; // ms of un-frozen play time this run
     this.frozen = false; // tactical time-freeze (Space)
+    this.stepTimer = 0; // footstep-sound cadence
   }
 
   create() {
@@ -221,6 +223,10 @@ export class GameScene extends Phaser.Scene {
     this.keys = this.input.keyboard.addKeys('W,A,S,D');
     this.input.mouse.disableContextMenu(); // free up right-click for later
 
+    // Any input is a user gesture — safe to start audio (idempotent).
+    this.input.on('pointerdown', () => ensureStarted());
+    this.input.keyboard.on('keydown', () => ensureStarted());
+
     // Left-click: an enemy → chase & attack it; the ground → walk there.
     // (WASD overrides either.)
     this.input.on('pointerdown', (pointer) => {
@@ -327,6 +333,7 @@ export class GameScene extends Phaser.Scene {
 
   /** World-space overlay (health bars, dot level) + fixed top-right XP UI. */
   setupOverlay() {
+    this.coneFx = this.add.graphics().setDepth(-2); // sight cones, under the entities
     this.fx = this.add.graphics().setDepth(50); // world-space, redrawn every frame
     this.playerLabel = this.add
       .text(0, 0, '', { fontFamily: 'monospace', fontSize: '12px', color: '#ffffff' })
@@ -376,6 +383,7 @@ export class GameScene extends Phaser.Scene {
       this.updateFistsFor(this.player, time, UNIT.radius);
       this.updatePlayerCombat(delta);
       this.checkDescend();
+      this.updateFootsteps(delta);
     }
     if (!this.frozen && !this.player.dead) this.updateEnemies(delta);
     if (!this.frozen) {
@@ -385,10 +393,37 @@ export class GameScene extends Phaser.Scene {
       }
     }
 
+    this.drawSightCones();
     this.drawOverlays();
     this.updateXpUi();
     this.updateHud();
     this.updateTimeIndicator();
+  }
+
+  /**
+   * Draw the sight cone of each un-alerted enemy that the PLAYER can currently
+   * see (line of sight, no wall between). Each cone is raycast against walls so
+   * it doesn't bleed through them.
+   */
+  drawSightCones() {
+    const g = this.coneFx;
+    g.clear();
+    const p = this.player;
+    const RAYS = 26;
+
+    for (const e of this.enemies.getChildren()) {
+      if (!e.active || e.alerted) continue;
+      if (!this.hasLineOfSight(p.x, p.y, e.x, e.y)) continue; // only cones you can see
+
+      const points = [{ x: e.x, y: e.y }]; // fan starts at the enemy
+      for (let i = 0; i <= RAYS; i++) {
+        const a = e.facing - ENEMY.viewAngle + (2 * ENEMY.viewAngle) * (i / RAYS);
+        points.push(this.raycastToWall(e.x, e.y, a, ENEMY.sightRange));
+      }
+
+      g.fillStyle(e.baseColor, 0.14);
+      g.fillPoints(points, true);
+    }
   }
 
   /** Draw the bottom-right play/pause icon and the mm:ss game timer above it. */
@@ -538,6 +573,33 @@ export class GameScene extends Phaser.Scene {
     return true;
   }
 
+  /** Can enemy `e` see the player? Inside its cone (range + angle) with clear sight. */
+  enemyCanSee(e, p, d) {
+    if (d > ENEMY.sightRange) return false;
+    const toPlayer = angleBetween(e.x, e.y, p.x, p.y);
+    if (Math.abs(angleDelta(e.facing, toPlayer)) > ENEMY.viewAngle) return false;
+    return this.hasLineOfSight(e.x, e.y, p.x, p.y);
+  }
+
+  /**
+   * March a ray from (x,y) at `angle` until it hits a wall tile or reaches
+   * `maxDist`; return the stopping point. Used to clip sight cones at walls.
+   */
+  raycastToWall(x, y, angle, maxDist) {
+    const dx = Math.cos(angle);
+    const dy = Math.sin(angle);
+    const step = TILE * 0.25;
+    for (let dist = step; dist < maxDist; dist += step) {
+      const tx = Math.floor((x + dx * dist) / TILE);
+      const ty = Math.floor((y + dy * dist) / TILE);
+      const row = this.level.grid[ty];
+      if (!row || row[tx] === WALL) {
+        return { x: x + dx * (dist - step), y: y + dy * (dist - step) };
+      }
+    }
+    return { x: x + dx * maxDist, y: y + dy * maxDist };
+  }
+
   /** Enemy AI: chase the player when seen & in range, punch when adjacent. */
   updateEnemies(delta) {
     const p = this.player;
@@ -553,12 +615,14 @@ export class GameScene extends Phaser.Scene {
 
       const d = dist(e.x, e.y, p.x, p.y);
 
-      // Only wake up when the player is in range AND actually visible (no wall
-      // between them). Once alerted, keep chasing until the player escapes.
+      // Only wake up when the player is inside the sight cone (range + angle)
+      // and not hidden behind a wall. Once alerted, chase until the player
+      // escapes aggro range.
       if (!e.alerted) {
-        if (d <= ENEMY.aggroRange && this.hasLineOfSight(e.x, e.y, p.x, p.y)) {
+        if (this.enemyCanSee(e, p, d)) {
           e.alerted = true;
         } else {
+          e.facing += e.lookSpeed * (delta / 1000); // sweep the cone while idle
           e.setVelocity(0, 0);
           e.attackTarget = null;
           continue;
@@ -702,6 +766,17 @@ export class GameScene extends Phaser.Scene {
     }
 
     p.setVelocity(0, 0);
+  }
+
+  /** Play a footstep sound on a steady cadence while the dot is moving. */
+  updateFootsteps(delta) {
+    this.stepTimer -= delta;
+    const v = this.player.body.velocity;
+    const moving = Math.hypot(v.x, v.y) > 10;
+    if (moving && this.stepTimer <= 0) {
+      playFootstep();
+      this.stepTimer = 300; // ms between steps
+    }
   }
 
   /**
@@ -878,6 +953,8 @@ export class GameScene extends Phaser.Scene {
    * While a fist is punching, updateFists() leaves it to this tween.
    */
   punchSideFist(owner, angle, scale = 1) {
+    if (owner === this.player) playPunch(); // sound for your own hits only
+
     owner.punchToggle = !owner.punchToggle;
     const fist = owner.punchToggle ? owner.fistR : owner.fistL;
     fist.punching = true;
