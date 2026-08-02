@@ -8,6 +8,8 @@
 
 let ctx = null;
 let master = null;
+let musicBus = null; // background music routes here
+let sfxBus = null; // game sounds (footsteps, punches, growls) route here
 let noise = null;
 let music = null;
 
@@ -15,7 +17,11 @@ let music = null;
 const VOLUME_LEVELS = [0.6, 0.3, 0];
 let volIndex = 0;
 
-/** Create the AudioContext + master bus (called on the first user gesture). */
+// Independent bus volumes (0..1), set by the two sliders in the pause menu.
+let musicVolume = 0.5; // music quieter by default
+let sfxVolume = 1.0; // game sounds at full
+
+/** Create the AudioContext + master/music/sfx buses (on first user gesture). */
 function init() {
   if (ctx) return;
   const AC = window.AudioContext || window.webkitAudioContext;
@@ -23,6 +29,32 @@ function init() {
   master = ctx.createGain();
   master.gain.value = VOLUME_LEVELS[volIndex];
   master.connect(ctx.destination);
+
+  musicBus = ctx.createGain();
+  musicBus.gain.value = musicVolume;
+  musicBus.connect(master);
+
+  sfxBus = ctx.createGain();
+  sfxBus.gain.value = sfxVolume;
+  sfxBus.connect(master);
+}
+
+/** Background-music volume (0..1). */
+export function getMusicVolume() {
+  return musicVolume;
+}
+export function setMusicVolume(v) {
+  musicVolume = Math.max(0, Math.min(1, v));
+  if (musicBus) musicBus.gain.value = musicVolume;
+}
+
+/** Game-sounds (SFX) volume (0..1). */
+export function getSfxVolume() {
+  return sfxVolume;
+}
+export function setSfxVolume(v) {
+  sfxVolume = Math.max(0, Math.min(1, v));
+  if (sfxBus) sfxBus.gain.value = sfxVolume;
 }
 
 /** Current volume state, for the UI icon. */
@@ -67,7 +99,7 @@ export function playFootstep() {
   g.gain.setValueAtTime(0.0001, t);
   g.gain.exponentialRampToValueAtTime(0.18, t + 0.005);
   g.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
-  osc.connect(g).connect(master);
+  osc.connect(g).connect(sfxBus);
   osc.start(t);
   osc.stop(t + 0.14);
 }
@@ -87,7 +119,7 @@ export function playPunch() {
   const gn = ctx.createGain();
   gn.gain.setValueAtTime(0.35, t);
   gn.gain.exponentialRampToValueAtTime(0.0001, t + 0.11);
-  src.connect(bp).connect(gn).connect(master);
+  src.connect(bp).connect(gn).connect(sfxBus);
   src.start(t);
   src.stop(t + 0.12);
 
@@ -99,7 +131,7 @@ export function playPunch() {
   osc.frequency.exponentialRampToValueAtTime(60, t + 0.1);
   gt.gain.setValueAtTime(0.3, t);
   gt.gain.exponentialRampToValueAtTime(0.0001, t + 0.14);
-  osc.connect(gt).connect(master);
+  osc.connect(gt).connect(sfxBus);
   osc.start(t);
   osc.stop(t + 0.16);
 }
@@ -137,7 +169,7 @@ export function playAggro() {
   const shaper = ctx.createWaveShaper();
   shaper.curve = getDistCurve();
   shaper.oversample = '2x';
-  osc.connect(g).connect(lp).connect(shaper).connect(master);
+  osc.connect(g).connect(lp).connect(shaper).connect(sfxBus);
   osc.start(t);
   osc.stop(t + 0.3);
 }
@@ -152,7 +184,7 @@ function startMusic() {
   const out = ctx.createGain();
   out.gain.value = 0.0001;
   out.gain.linearRampToValueAtTime(0.45, ctx.currentTime + 4); // fade in
-  out.connect(master);
+  out.connect(musicBus);
 
   // Shared feedback delay → cavernous echo.
   const delay = ctx.createDelay(1.0);
