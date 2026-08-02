@@ -124,6 +124,8 @@ export class GameScene extends Phaser.Scene {
     this.player.attackTimer = 0; // ms until the next auto-attack is ready
     this.player.attackTarget = null; // enemy currently being boxed (fists face it)
     this.player.moveTarget = null; // click-to-move destination, or null
+    this.player.bestDist = Infinity; // closest we've gotten to moveTarget (stuck check)
+    this.player.stuckTime = 0; // ms of no progress toward moveTarget
     this.player.focusEnemy = null; // clicked enemy to chase & auto-attack, or null
     this.player.punchToggle = false; // alternates which side-fist punches
     this.player.wigPhase = 0; // fist-wiggle phase offset (see updateFistsFor)
@@ -254,6 +256,8 @@ export class GameScene extends Phaser.Scene {
       } else {
         this.player.focusEnemy = null;
         this.player.moveTarget = { x: pointer.worldX, y: pointer.worldY };
+        this.player.bestDist = Infinity; // reset progress tracker for the new order
+        this.player.stuckTime = 0;
         this.showMoveMarker(pointer.worldX, pointer.worldY);
       }
     });
@@ -504,7 +508,7 @@ export class GameScene extends Phaser.Scene {
     // When frozen, the simulation halts but order-input (clicks) stays live.
     if (!this.frozen && !this.player.dead) {
       this.gameTime += delta; // timer only advances during un-frozen play
-      this.movePlayer();
+      this.movePlayer(delta);
       this.updateFistsFor(this.player, time, UNIT.radius);
       this.updatePlayerCombat(delta);
       this.checkDescend();
@@ -911,7 +915,7 @@ export class GameScene extends Phaser.Scene {
    * click-move). Otherwise, if a click-to-move target is set, steer toward it,
    * slowing on approach and stopping when arrived.
    */
-  movePlayer() {
+  movePlayer(delta) {
     const p = this.player;
     const k = this.keys;
 
@@ -948,24 +952,31 @@ export class GameScene extends Phaser.Scene {
     }
 
     if (p.moveTarget) {
-      // No pathfinding yet: if a wall is blocking the way, stop here instead of
-      // grinding against it.
-      if (!p.body.blocked.none) {
-        p.moveTarget = null;
-        p.setVelocity(0, 0);
-        return;
-      }
-
       const dx = p.moveTarget.x - p.x;
       const dy = p.moveTarget.y - p.y;
       const d = Math.hypot(dx, dy);
       if (d <= UNIT.stopRadius) {
         p.moveTarget = null;
         p.setVelocity(0, 0);
+        return;
+      }
+
+      // Steer toward the target. The wall collider slides the dot along walls —
+      // it loses only the into-wall component, so a glancing touch merely slows
+      // it (by the hit angle) rather than stopping it dead.
+      const speed = d < UNIT.arriveRadius ? UNIT.speed * (d / UNIT.arriveRadius) : UNIT.speed;
+      p.setVelocity((dx / d) * speed, (dy / d) * speed);
+
+      // Only give up if we make no real progress for a while (no pathfinding yet).
+      if (d < p.bestDist - 1) {
+        p.bestDist = d;
+        p.stuckTime = 0;
       } else {
-        // Ease down within the arrive radius so it doesn't overshoot.
-        const speed = d < UNIT.arriveRadius ? UNIT.speed * (d / UNIT.arriveRadius) : UNIT.speed;
-        p.setVelocity((dx / d) * speed, (dy / d) * speed);
+        p.stuckTime += delta;
+        if (p.stuckTime > 1200) {
+          p.moveTarget = null;
+          p.setVelocity(0, 0);
+        }
       }
       return;
     }
@@ -1037,12 +1048,39 @@ export class GameScene extends Phaser.Scene {
   /** Apply damage to a target; flash it if it survives, award XP if it dies. */
   dealDamage(target, amount) {
     if (!target || !target.active) return;
+    const tx = target.x;
+    const ty = target.y;
     const killed = target.takeDamage(amount);
+    // Floating number over a hit enemy, in the player's colour.
+    if (target.faction === 'enemy') {
+      this.showDamageNumber(tx, ty, `${Math.round(amount)}`, hexColor(COLORS.player));
+    }
     if (killed) {
       if (target.faction === 'enemy') this.grantXp(target.level);
     } else {
       this.flashHit(target);
     }
+  }
+
+  /** A floating combat number that rises and fades. */
+  showDamageNumber(x, y, text, color) {
+    const label = this.add
+      .text(x, y - UNIT.radius - 4, text, {
+        fontFamily: 'monospace',
+        fontSize: '16px',
+        color,
+        fontStyle: 'bold',
+      })
+      .setOrigin(0.5, 1)
+      .setDepth(70);
+    this.tweens.add({
+      targets: label,
+      y: label.y - 24,
+      alpha: 0,
+      duration: 700,
+      ease: 'Quad.easeOut',
+      onComplete: () => label.destroy(),
+    });
   }
 
   /** Grant XP for a kill (1 per enemy level) and handle level-ups. */
@@ -1071,7 +1109,9 @@ export class GameScene extends Phaser.Scene {
     const p = this.player;
     if (p.dead) return true;
     const defense = p.weapon.defense ?? 0;
-    p.hp -= amount * (1 - defense);
+    const taken = amount * (1 - defense);
+    p.hp -= taken;
+    this.showDamageNumber(p.x, p.y, `-${Math.round(taken)}`, '#ff5a5a'); // red -N
     if (p.hp <= 0) {
       p.hp = 0;
       this.onPlayerDead();
@@ -1191,6 +1231,11 @@ export class GameScene extends Phaser.Scene {
 // ============================================================================
 // Local helpers (module-private)
 // ============================================================================
+
+/** Format an integer colour as a CSS hex string (e.g. 0x3ad0ff → "#3ad0ff"). */
+function hexColor(int) {
+  return '#' + int.toString(16).padStart(6, '0');
+}
 
 /**
  * Greedy-merge horizontal runs of wall tiles into strips, so we create a
