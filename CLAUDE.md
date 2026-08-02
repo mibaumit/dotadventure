@@ -84,6 +84,25 @@ DotAdventure/
 
 ---
 
+## Starting a new feature — plan & clarify first (IMPORTANT)
+
+Before implementing any new feature, **write a short plan and confirm it with
+the user — do NOT auto-decide core functionality.**
+
+1. **Draft a brief plan:** what the feature does, how it fits existing systems,
+   the key mechanics/numbers, UI/controls, and edge cases.
+2. **Ask the user** about anything unclear or design-defining — especially
+   *core* behavior (how it plays, what the numbers are, how it interacts with
+   other systems). List concrete options and a recommendation rather than
+   silently picking one.
+3. **Only start building once the design is clear.** Pick sensible defaults only
+   for genuinely minor details, and say which defaults you chose.
+4. Then implement incrementally, verify it **renders/plays**, and update the
+   spec (below).
+
+Rule of thumb: if a choice would change how the feature *plays* or is hard to
+reverse, ask — don't assume.
+
 ## Specs — keep them in sync with the code (IMPORTANT)
 
 The feature specification lives in **`docs/specs/`** (see
