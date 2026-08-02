@@ -521,7 +521,24 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  /** Enemy AI: chase the player when in aggro range, punch when adjacent. */
+  /**
+   * True if a straight line from (ax,ay) to (bx,by) crosses no wall tiles.
+   * Samples the grid a few times per tile — good enough for tile-sized walls.
+   */
+  hasLineOfSight(ax, ay, bx, by) {
+    const d = Math.hypot(bx - ax, by - ay);
+    const steps = Math.ceil(d / (TILE * 0.4)); // ~2.5 samples per tile
+    for (let i = 1; i < steps; i++) {
+      const t = i / steps;
+      const tx = Math.floor((ax + (bx - ax) * t) / TILE);
+      const ty = Math.floor((ay + (by - ay) * t) / TILE);
+      const row = this.level.grid[ty];
+      if (!row || row[tx] === WALL) return false;
+    }
+    return true;
+  }
+
+  /** Enemy AI: chase the player when seen & in range, punch when adjacent. */
   updateEnemies(delta) {
     const p = this.player;
     for (const e of this.enemies.getChildren()) {
@@ -535,8 +552,22 @@ export class GameScene extends Phaser.Scene {
       }
 
       const d = dist(e.x, e.y, p.x, p.y);
+
+      // Only wake up when the player is in range AND actually visible (no wall
+      // between them). Once alerted, keep chasing until the player escapes.
+      if (!e.alerted) {
+        if (d <= ENEMY.aggroRange && this.hasLineOfSight(e.x, e.y, p.x, p.y)) {
+          e.alerted = true;
+        } else {
+          e.setVelocity(0, 0);
+          e.attackTarget = null;
+          continue;
+        }
+      }
+
       if (d > ENEMY.aggroRange) {
-        e.setVelocity(0, 0); // hasn't noticed you yet
+        e.alerted = false; // player escaped — go back to sleep
+        e.setVelocity(0, 0);
         e.attackTarget = null;
         continue;
       }
