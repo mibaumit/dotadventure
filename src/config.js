@@ -13,6 +13,7 @@ export const COLORS = {
   wallEdge: 0x3a4877,
 
   player: 0x3ad0ff,
+  playerFist: 0x1f86b0, // a bit darker than the dot — the little side fists
   playerSelected: 0xfff2a8,
   selectionRing: 0xffffff,
 
@@ -23,6 +24,7 @@ export const COLORS = {
   hpGood: 0x57e389,
   hpLow: 0xff5a5a,
   hpEnemy: 0xff5a5a,
+  xp: 0xffcf5c, // experience bar (amber)
 };
 
 export const UNIT = {
@@ -37,8 +39,7 @@ export const ENEMY = {
   radius: 12,
   speedMelee: 112,
   speedArcher: 96,
-  hpMelee: 42,
-  hpArcher: 26,
+  hpPerLevel: 2, // an enemy's HP = level * hpPerLevel (level-1 enemy = 2 HP)
   aggroRange: 340, // distance at which an enemy notices the squad
 };
 

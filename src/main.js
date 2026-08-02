@@ -4,6 +4,7 @@
 
 import { COLORS } from './config.js';
 import { GameScene } from './scenes/GameScene.js';
+import { PauseScene } from './scenes/PauseScene.js';
 
 const config = {
   type: Phaser.AUTO, // WebGL if available, else Canvas
@@ -22,8 +23,11 @@ const config = {
       gravity: { x: 0, y: 0 }, // top-down: no gravity
     },
   },
-  scene: [GameScene],
+  scene: [GameScene, PauseScene],
 };
 
-// eslint-disable-next-line no-new
-new Phaser.Game(config);
+const game = new Phaser.Game(config);
+
+// Dev handle: lets you poke at the running game from the browser console
+// (e.g. `game.scene.keys.GameScene`). Handy while building; harmless to ship.
+window.game = game;

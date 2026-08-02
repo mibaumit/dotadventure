@@ -17,6 +17,28 @@
 import { angleBetween } from './util.js';
 
 export const WEAPONS = {
+  // Default when a dot has no weapon: bare fists, 1 damage, short reach.
+  fists: {
+    id: 'fists',
+    name: 'Fists',
+    kind: 'melee',
+    range: 40,
+    cooldown: 420,
+    damage: 1,
+    defense: 0,
+    specialCooldown: 1400,
+    color: 0xffffff,
+    attack({ scene, owner, target }) {
+      scene.dealDamage(target, this.damage);
+      owner.startSwing(angleBetween(owner.x, owner.y, target.x, target.y));
+    },
+    // A harder two-fisted jab in front.
+    special({ scene, owner, aimAngle }) {
+      scene.meleeSweep(owner, aimAngle, this.range + 8, Math.PI * 0.6, this.damage * 2);
+      owner.startSwing(aimAngle, 1.3);
+    },
+  },
+
   sword: {
     id: 'sword',
     name: 'Sword',
