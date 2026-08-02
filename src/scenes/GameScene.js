@@ -24,11 +24,14 @@ export class GameScene extends Phaser.Scene {
   init(data) {
     this.depth = data?.depth ?? 1;
     this.seed = data?.seed ?? 12345;
+    this.carryPlayer = data?.player ?? null; // progression carried from above
+    this.descending = false; // guards the descend trigger
   }
 
   create() {
     this.buildTextures();
     this.buildLevel();
+    this.buildExit();
     this.spawnPlayer();
     this.spawnEnemies();
     this.setupCamera();
@@ -85,11 +88,10 @@ export class GameScene extends Phaser.Scene {
     this.physics.world.setBounds(0, 0, this.worldW, this.worldH);
   }
 
-  /** Create the single player dot in the first room. */
+  /** Create the player dot at the level's (safe) start point. */
   spawnPlayer() {
-    const start = roomCenterTile(this.level.rooms[0]);
-    const x = (start.tx + 0.5) * TILE;
-    const y = (start.ty + 0.5) * TILE;
+    const x = (this.level.start.tx + 0.5) * TILE;
+    const y = (this.level.start.ty + 0.5) * TILE;
 
     this.player = this.physics.add.sprite(x, y, 'dot');
     this.player.setTint(COLORS.player);
@@ -108,17 +110,59 @@ export class GameScene extends Phaser.Scene {
     this.player.xpToNext = this.player.level * 10; // first level-up needs 10 xp
     this.player.weapon = getWeapon('fists');
     this.player.attackTimer = 0; // ms until the next auto-attack is ready
-    this.player.punchSide = 1; // alternates so left/right fists take turns
+    this.player.attackTarget = null; // enemy currently being boxed (fists face it)
+    this.player.punchToggle = false; // alternates which side-fist punches
     this.player.facing = -Math.PI / 2; // last-moved direction (starts facing up)
     this.player.takeDamage = (amount) => this.damagePlayer(amount);
-    // Throw a little fist toward the target on each attack.
-    this.player.startSwing = (angle, scale = 1) => this.showPunch(this.player, angle, scale);
+    // On each attack, thrust one of the character's side-fists at the target.
+    this.player.startSwing = (angle, scale = 1) => this.punchSideFist(this.player, angle, scale);
+
+    // Carry progression down from the previous level (permadeath run).
+    if (this.carryPlayer) {
+      const c = this.carryPlayer;
+      this.player.level = c.level;
+      this.player.xp = c.xp;
+      this.player.xpToNext = c.xpToNext;
+      this.player.maxHp = c.maxHp;
+      this.player.hp = c.hp;
+      this.player.weapon = getWeapon(c.weaponId);
+    }
 
     // Two little fist-dots that ride on the character's sides (darker shade).
     this.player.fistL = this.makeFist();
     this.player.fistR = this.makeFist();
 
     this.physics.add.collider(this.player, this.walls);
+  }
+
+  /** Draw the descent staircase at the level's exit and record its position. */
+  buildExit() {
+    const ex = (this.level.exit.tx + 0.5) * TILE;
+    const ey = (this.level.exit.ty + 0.5) * TILE;
+    this.exit = { x: ex, y: ey };
+
+    const s = TILE * 0.72;
+    const g = this.add.graphics().setDepth(-3);
+    g.fillStyle(0x243049, 1); // recessed base tile
+    g.fillRect(ex - s / 2 - 3, ey - s / 2 - 3, s + 6, s + 6);
+
+    // Descending steps (narrowing) to read as "down".
+    const steps = 4;
+    const stepH = s / steps;
+    g.fillStyle(0x9fb4e0, 1);
+    for (let i = 0; i < steps; i++) {
+      const w = s * (1 - i / (steps + 1));
+      g.fillRect(ex - w / 2, ey - s / 2 + i * stepH, w, stepH - 2);
+    }
+
+    this.add
+      .text(ex, ey - s / 2 - 6, '▼ down', {
+        fontFamily: 'monospace',
+        fontSize: '11px',
+        color: '#cfe6ff',
+      })
+      .setOrigin(0.5, 1)
+      .setDepth(-3);
   }
 
   /** A small, darker "fist" dot that rides beside the character. */
@@ -134,6 +178,11 @@ export class GameScene extends Phaser.Scene {
     this.enemies = this.physics.add.group();
     const rng = makeRng(this.seed + this.depth * 7919);
 
+    // Keep a buffer around the start so nothing can aggro the player instantly.
+    const startX = (this.level.start.tx + 0.5) * TILE;
+    const startY = (this.level.start.ty + 0.5) * TILE;
+    const safeRadius = ENEMY.aggroRange + 80;
+
     // rooms[0] is the player's start room — leave it clear.
     for (let i = 1; i < this.level.rooms.length; i++) {
       const room = this.level.rooms[i];
@@ -141,11 +190,12 @@ export class GameScene extends Phaser.Scene {
       for (let n = 0; n < count; n++) {
         const tx = randInt(rng, room.x, room.x + room.w - 1);
         const ty = randInt(rng, room.y, room.y + room.h - 1);
+        const px = (tx + 0.5) * TILE;
+        const py = (ty + 0.5) * TILE;
+        if (dist(px, py, startX, startY) < safeRadius) continue; // too near the start
+
         const level = randInt(rng, 1, this.depth); // tougher enemies deeper down
-        const enemy = new Enemy(this, (tx + 0.5) * TILE, (ty + 0.5) * TILE, {
-          shape: 'square',
-          level,
-        });
+        const enemy = new Enemy(this, px, py, { shape: 'square', level });
         this.enemies.add(enemy);
       }
     }
@@ -181,7 +231,7 @@ export class GameScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setDepth(100);
     this.add
-      .text(12, 40, 'Move: WASD   ·   walk into a square to attack it', style)
+      .text(12, 40, 'WASD move · face a square to punch it · reach the ▼ stairs to descend', style)
       .setScrollFactor(0)
       .setDepth(100);
     this.hudText = this.add
@@ -230,6 +280,7 @@ export class GameScene extends Phaser.Scene {
       this.movePlayer();
       this.updateFists(time);
       this.updatePlayerCombat(delta);
+      this.checkDescend();
     }
     this.updateEnemies(delta);
     this.drawOverlays();
@@ -237,25 +288,74 @@ export class GameScene extends Phaser.Scene {
     this.updateHud();
   }
 
-  /** Position the two side-fists relative to facing; wiggle while moving. */
+  /** Descend to the next dungeon level when the player reaches the stairs. */
+  checkDescend() {
+    if (this.descending) return;
+    if (dist(this.player.x, this.player.y, this.exit.x, this.exit.y) < TILE * 0.55) {
+      this.descend();
+    }
+  }
+
+  /** Rebuild the scene one level deeper, carrying the player's progression. */
+  descend() {
+    this.descending = true;
+    const p = this.player;
+    this.scene.restart({
+      depth: this.depth + 1,
+      seed: this.seed,
+      player: {
+        level: p.level,
+        xp: p.xp,
+        xpToNext: p.xpToNext,
+        maxHp: p.maxHp,
+        hp: GAME.healOnDescend ? p.maxHp : p.hp,
+        weaponId: p.weapon.id,
+      },
+    });
+  }
+
+  /**
+   * Position the two side-fists each frame. While boxing an enemy the fists are
+   * held up toward that enemy (they stay on its side between punches); otherwise
+   * they ride on the character's left/right and wiggle as it moves.
+   * A fist that's mid-punch is driven by its tween, so we leave it alone.
+   */
   updateFists(time) {
     const p = this.player;
     const v = p.body.velocity;
     const moving = Math.hypot(v.x, v.y) > 5;
     if (moving) p.facing = Math.atan2(v.y, v.x); // face where we're heading
 
-    const side = p.facing + Math.PI / 2; // the character's left/right axis
     const lateral = UNIT.radius + 4;
-    const wig = moving ? Math.sin(time * 0.02) * 4 : 0; // bob back-and-forth
 
+    if (p.attackTarget && p.attackTarget.active) {
+      // Guard: both fists flank the direction of the enemy, on its side.
+      const aim = angleBetween(p.x, p.y, p.attackTarget.x, p.attackTarget.y);
+      const spread = Math.PI * 0.3; // ~54° either side of the aim
+      this.placeFist(p.fistL, p, aim - spread, lateral);
+      this.placeFist(p.fistR, p, aim + spread, lateral);
+      return;
+    }
+
+    // Idle / moving: fists on the character's left & right, bobbing out of phase.
+    const side = p.facing + Math.PI / 2;
+    const wig = moving ? Math.sin(time * 0.02) * 4 : 0;
     const fx = Math.cos(p.facing);
     const fy = Math.sin(p.facing);
     const sx = Math.cos(side);
     const sy = Math.sin(side);
+    if (!p.fistL.punching) {
+      p.fistL.setPosition(p.x + sx * lateral + fx * wig, p.y + sy * lateral + fy * wig);
+    }
+    if (!p.fistR.punching) {
+      p.fistR.setPosition(p.x - sx * lateral - fx * wig, p.y - sy * lateral - fy * wig);
+    }
+  }
 
-    // Left and right fists sit on opposite sides and swing out of phase.
-    p.fistL.setPosition(p.x + sx * lateral + fx * wig, p.y + sy * lateral + fy * wig);
-    p.fistR.setPosition(p.x - sx * lateral - fx * wig, p.y - sy * lateral - fy * wig);
+  /** Place a fist at `angle`/`dist` from an owner, unless it's mid-punch. */
+  placeFist(fist, owner, angle, dist) {
+    if (fist.punching) return; // its tween owns the position right now
+    fist.setPosition(owner.x + Math.cos(angle) * dist, owner.y + Math.sin(angle) * dist);
   }
 
   /** Enemy AI: chase the player when in aggro range, punch when adjacent. */
@@ -357,29 +457,37 @@ export class GameScene extends Phaser.Scene {
     this.player.setVelocity(vx, vy);
   }
 
-  /** Auto-attack: hit the nearest enemy in weapon range when off cooldown. */
+  /**
+   * Auto-attack: hit the nearest enemy that is both in weapon range AND within
+   * the dot's front-facing arc. Turn away and you stop swinging at it.
+   */
   updatePlayerCombat(delta) {
     const p = this.player;
     if (p.attackTimer > 0) p.attackTimer -= delta;
 
-    const target = this.nearestEnemyInRange(p, p.weapon.range);
+    const target = this.nearestEnemyInArc(p, p.weapon.range, p.facing, UNIT.attackArc);
+    p.attackTarget = target || null; // drives fist orientation while boxing
     if (target && p.attackTimer <= 0) {
       p.weapon.attack({ scene: this, owner: p, target });
       p.attackTimer = p.weapon.cooldown;
     }
   }
 
-  /** Nearest active enemy within `range` (center-to-center), or null. */
-  nearestEnemyInRange(from, range) {
+  /**
+   * Nearest active enemy within `range` and within `halfArc` of `facing`
+   * (center-to-center), or null. A halfArc of PI means "any direction".
+   */
+  nearestEnemyInArc(from, range, facing, halfArc) {
     let best = null;
     let bestDist = range;
     for (const e of this.enemies.getChildren()) {
       if (!e.active) continue;
       const d = dist(from.x, from.y, e.x, e.y);
-      if (d <= bestDist) {
-        bestDist = d;
-        best = e;
-      }
+      if (d > bestDist) continue;
+      const toEnemy = angleBetween(from.x, from.y, e.x, e.y);
+      if (Math.abs(angleDelta(facing, toEnemy)) > halfArc) continue; // not facing it
+      bestDist = d;
+      best = e;
     }
     return best;
   }
@@ -515,6 +623,31 @@ export class GameScene extends Phaser.Scene {
       yoyo: true,
       ease: 'Quad.easeOut',
       onComplete: () => fist.destroy(),
+    });
+  }
+
+  /**
+   * Punch by thrusting one of the character's OWN side-fists toward the target,
+   * then letting it snap back to its side. Alternates left/right each punch.
+   * While a fist is punching, updateFists() leaves it to this tween.
+   */
+  punchSideFist(owner, angle, scale = 1) {
+    owner.punchToggle = !owner.punchToggle;
+    const fist = owner.punchToggle ? owner.fistR : owner.fistL;
+    fist.punching = true;
+
+    const reach = UNIT.radius + 16 * scale;
+    this.tweens.killTweensOf(fist);
+    this.tweens.add({
+      targets: fist,
+      x: owner.x + Math.cos(angle) * reach,
+      y: owner.y + Math.sin(angle) * reach,
+      duration: 55,
+      yoyo: true,
+      ease: 'Quad.easeOut',
+      onComplete: () => {
+        fist.punching = false;
+      },
     });
   }
 

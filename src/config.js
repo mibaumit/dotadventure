@@ -33,6 +33,7 @@ export const UNIT = {
   hp: 100,
   arriveRadius: 30, // start slowing within this distance of target
   stopRadius: 6, // consider "arrived" within this distance
+  attackArc: Math.PI * 0.42, // ~75° half-angle: only auto-attack enemies you face
 };
 
 export const ENEMY = {

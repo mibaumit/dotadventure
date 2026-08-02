@@ -44,7 +44,21 @@ export function generateLevel({ width, height, depth = 1, seed = 1 }) {
     connectRooms(grid, rooms[i - 1], rooms[i], rng);
   }
 
-  return { grid, width, height, rooms };
+  // Start = first room's center. Exit (staircase down) = the room whose center
+  // is farthest from the start, so descending means crossing the dungeon.
+  const start = roomCenterTile(rooms[0]);
+  let exit = start;
+  let exitDistSq = -1;
+  for (let i = 1; i < rooms.length; i++) {
+    const c = roomCenterTile(rooms[i]);
+    const dSq = (c.tx - start.tx) ** 2 + (c.ty - start.ty) ** 2;
+    if (dSq > exitDistSq) {
+      exitDistSq = dSq;
+      exit = c;
+    }
+  }
+
+  return { grid, width, height, rooms, start, exit };
 }
 
 // ---------------------------------------------------------------------------

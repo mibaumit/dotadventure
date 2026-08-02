@@ -106,14 +106,16 @@ DotAdventure/
 
 ---
 
-## Controls (current)
+## Controls
 
-- **WASD** — move the selected dot
-- **Tab** / **1–9** — switch selected dot
-- **Left-click** — dot: select it · enemy: order squad to attack it · ground: move squad there
-- **Right-click** — move squad to a point
-- **E** — Follow (reform on leader) · **Q** — Hold/Defend
-- **H** — toggle help · **N** — next level (when cleared)
+Implemented now:
+- **WASD** — move the dot
+- **Esc** — pause menu (Continue game / Restart game)
+- Combat is automatic: the dot punches enemies it **faces** and that are in range
+- Reach the **▼ staircase** to descend to the next (deeper, harder) level
+
+Planned (see roadmap): **Tab/1–9** switch dot, **left/right-click** orders,
+**E/Q** follow/hold, **Space** mouse-aimed special, **X** swap weapon.
 
 ---
 
