@@ -14,6 +14,7 @@ import { makeShapeTexture, shapeTextureKey } from '../shapes.js';
 import { makeRng, randInt, dist, angleDelta, angleBetween, clamp, TAU } from '../util.js';
 import { Enemy } from '../entities/Enemy.js';
 import { getWeapon } from '../weapons.js';
+import { getItem, ITEM_IDS, ITEM_SHAPES } from '../items.js';
 import {
   ensureStarted,
   playFootstep,
@@ -37,6 +38,7 @@ export class GameScene extends Phaser.Scene {
     this.gameTime = data?.gameTime ?? 0; // ms of un-frozen play time this run
     this.frozen = false; // tactical time-freeze (Space)
     this.stepTimer = 0; // footstep-sound cadence
+    this.carryHotbar = data?.hotbar ?? null; // action-bar items carried down
   }
 
   create() {
@@ -45,10 +47,13 @@ export class GameScene extends Phaser.Scene {
     this.buildExit();
     this.spawnPlayer();
     this.spawnEnemies();
+    this.hotbar = this.carryHotbar ?? []; // up to 9 {id, count} slots
+    this.spawnItems();
     this.setupCamera();
     this.setupInput();
     this.buildHud();
     this.setupOverlay();
+    this.setupHotbarUI();
     this.setupFog();
   }
 
@@ -62,6 +67,31 @@ export class GameScene extends Phaser.Scene {
     makeShapeTexture(this, 'dot', 'circle', size);
     makeShapeTexture(this, shapeTextureKey('square'), 'square', size);
     makeShapeTexture(this, 'fist', 'circle', Math.round(UNIT.radius * 0.8)); // little punch
+    for (const shape of ITEM_SHAPES) {
+      makeShapeTexture(this, `item_${shape}`, shape, 20); // item pickup icons
+    }
+    makeShapeTexture(this, 'loot', 'square', 10); // little dropped loot square
+
+    // Arrow projectile (a short dash).
+    if (!this.textures.exists('arrow')) {
+      const ag = this.make.graphics({ x: 0, y: 0, add: false });
+      ag.fillStyle(0xffffff, 1);
+      ag.fillRect(0, 0, 12, 3);
+      ag.generateTexture('arrow', 12, 3);
+      ag.destroy();
+    }
+    // Treasure chest.
+    if (!this.textures.exists('chest')) {
+      const cg = this.make.graphics({ x: 0, y: 0, add: false });
+      cg.fillStyle(0x8a5a2b, 1);
+      cg.fillRect(0, 5, 26, 17); // body
+      cg.fillStyle(0x6b4420, 1);
+      cg.fillRect(0, 0, 26, 8); // lid
+      cg.fillStyle(0xf2c14e, 1);
+      cg.fillRect(11, 7, 4, 6); // lock
+      cg.generateTexture('chest', 26, 22);
+      cg.destroy();
+    }
   }
 
   /** Generate the dungeon and render floor + collidable walls. */
@@ -223,6 +253,56 @@ export class GameScene extends Phaser.Scene {
     // Arcade collider doesn't reliably push apart enemies moving in lockstep.
   }
 
+  /** Scatter a few item/spell pickups across the level's rooms. */
+  spawnItems() {
+    this.pickups = this.physics.add.group();
+    const rng = makeRng(this.seed + this.depth * 3301);
+
+    for (let i = 1; i < this.level.rooms.length; i++) {
+      if (rng() > 0.55) continue; // not every room has loot
+      const room = this.level.rooms[i];
+      const tx = randInt(rng, room.x, room.x + room.w - 1);
+      const ty = randInt(rng, room.y, room.y + room.h - 1);
+      const id = ITEM_IDS[randInt(rng, 0, ITEM_IDS.length - 1)];
+      const item = getItem(id);
+
+      const pickup = this.physics.add.sprite((tx + 0.5) * TILE, (ty + 0.5) * TILE, `item_${item.shape}`);
+      pickup.setTint(item.color).setDepth(0);
+      pickup.itemId = id;
+      this.tweens.add({
+        targets: pickup,
+        y: pickup.y - 4,
+        duration: 700,
+        yoyo: true,
+        repeat: -1,
+        ease: 'Sine.easeInOut',
+      });
+      this.pickups.add(pickup);
+    }
+
+    this.physics.add.overlap(this.player, this.pickups, (_p, pickup) => this.collectItem(pickup));
+  }
+
+  /** Add a picked-up item to the action bar (stacking by id). */
+  collectItem(pickup) {
+    const id = pickup.itemId;
+    pickup.destroy();
+    const slot = this.hotbar.find((s) => s.id === id);
+    if (slot) slot.count += 1;
+    else if (this.hotbar.length < 9) this.hotbar.push({ id, count: 1 });
+  }
+
+  /** Use the item in action-bar slot `i` (0-based), if any. */
+  useHotbarSlot(i) {
+    if (this.player.dead) return;
+    const slot = this.hotbar[i];
+    if (!slot) return;
+    if (getItem(slot.id).use(this)) {
+      slot.count -= 1;
+      if (slot.count <= 0) this.hotbar.splice(i, 1); // compact the bar
+    }
+  }
+
   setupCamera() {
     const cam = this.cameras.main;
     cam.setBounds(0, 0, this.worldW, this.worldH);
@@ -236,6 +316,11 @@ export class GameScene extends Phaser.Scene {
     // Any input is a user gesture — safe to start audio (idempotent).
     this.input.on('pointerdown', () => ensureStarted());
     this.input.keyboard.on('keydown', () => ensureStarted());
+
+    // Action bar: number keys 1-9 use the item in that slot.
+    this.input.keyboard.on('keydown', (event) => {
+      if (event.key >= '1' && event.key <= '9') this.useHotbarSlot(Number(event.key) - 1);
+    });
 
     // Left-click: an enemy → chase & attack it; the ground → walk there.
     // (WASD overrides either.)
@@ -500,6 +585,80 @@ export class GameScene extends Phaser.Scene {
       .setDepth(100);
   }
 
+  /** Bottom-center WoW-style action bar (9 slots, keys 1-9). */
+  setupHotbarUI() {
+    this.hotbarFx = this.add.graphics().setScrollFactor(0).setDepth(100);
+    this.hotbarKeyLabels = [];
+    this.hotbarCountLabels = [];
+    for (let i = 0; i < 9; i++) {
+      this.hotbarKeyLabels.push(
+        this.add
+          .text(0, 0, `${i + 1}`, { fontFamily: 'monospace', fontSize: '10px', color: '#7f92b3' })
+          .setScrollFactor(0)
+          .setDepth(101)
+      );
+      this.hotbarCountLabels.push(
+        this.add
+          .text(0, 0, '', { fontFamily: 'monospace', fontSize: '12px', color: '#ffffff' })
+          .setOrigin(1, 1)
+          .setScrollFactor(0)
+          .setDepth(101)
+      );
+    }
+  }
+
+  /** Redraw the action bar each frame (slot frames, icons, stack counts). */
+  drawHotbar() {
+    const g = this.hotbarFx;
+    g.clear();
+    const n = 9;
+    const slot = 42;
+    const gap = 6;
+    const totalW = n * slot + (n - 1) * gap;
+    const x0 = Math.round(this.scale.width / 2 - totalW / 2);
+    const y = this.scale.height - slot - 10;
+
+    for (let i = 0; i < n; i++) {
+      const x = x0 + i * (slot + gap);
+      g.fillStyle(0x0d1420, 0.72);
+      g.fillRect(x, y, slot, slot);
+      g.lineStyle(1, 0x2a3350, 1);
+      g.strokeRect(x + 0.5, y + 0.5, slot - 1, slot - 1);
+      this.hotbarKeyLabels[i].setPosition(x + 4, y + 3);
+
+      const s = this.hotbar[i];
+      if (s) {
+        const item = getItem(s.id);
+        this.drawIcon(g, item.shape, x + slot / 2, y + slot / 2, 22, item.color);
+        this.hotbarCountLabels[i]
+          .setPosition(x + slot - 4, y + slot - 2)
+          .setText(s.count > 1 ? `${s.count}` : '');
+      } else {
+        this.hotbarCountLabels[i].setText('');
+      }
+    }
+  }
+
+  /** Draw an item's icon shape, filled with `color`, centered at (cx,cy). */
+  drawIcon(g, shape, cx, cy, size, color) {
+    const h = size / 2;
+    g.fillStyle(color, 1);
+    if (shape === 'circle') g.fillCircle(cx, cy, h);
+    else if (shape === 'square') g.fillRect(cx - h, cy - h, size, size);
+    else if (shape === 'triangle') g.fillTriangle(cx, cy - h, cx + h, cy + h, cx - h, cy + h);
+    else if (shape === 'diamond') {
+      g.fillPoints(
+        [
+          { x: cx, y: cy - h },
+          { x: cx + h, y: cy },
+          { x: cx, y: cy + h },
+          { x: cx - h, y: cy },
+        ],
+        true
+      );
+    }
+  }
+
   // --------------------------------------------------------------------------
   // Per-frame update
   // --------------------------------------------------------------------------
@@ -537,6 +696,7 @@ export class GameScene extends Phaser.Scene {
     this.updateHud();
     this.updateTimeIndicator();
     this.drawSoundIcon();
+    this.drawHotbar();
   }
 
   /** Is the given screen point over the bottom-left sound icon? */
@@ -647,6 +807,7 @@ export class GameScene extends Phaser.Scene {
       depth: this.depth + 1,
       seed: this.seed,
       gameTime: this.gameTime, // keep the run timer going
+      hotbar: this.hotbar, // carry collected items down
       player: {
         level: p.level,
         xp: p.xp,
@@ -1080,6 +1241,20 @@ export class GameScene extends Phaser.Scene {
       duration: 700,
       ease: 'Quad.easeOut',
       onComplete: () => label.destroy(),
+    });
+  }
+
+  /** An expanding ring — visual for bombs / area spells. */
+  blastEffect(x, y, radius, color) {
+    const ring = this.add.circle(x, y, radius, color, 0).setStrokeStyle(3, color, 0.85).setDepth(2);
+    ring.setScale(0.2);
+    this.tweens.add({
+      targets: ring,
+      scale: 1,
+      alpha: 0,
+      duration: 320,
+      ease: 'Quad.easeOut',
+      onComplete: () => ring.destroy(),
     });
   }
 
