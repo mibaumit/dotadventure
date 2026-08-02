@@ -109,13 +109,17 @@ DotAdventure/
 ## Controls
 
 Implemented now:
-- **WASD** — move the dot
+- **WASD** — move the dot directly
+- **Left-click** — ground: walk there · an enemy: chase it and auto-attack it
+- **Space** — tactical **time-freeze** (simulation halts, but you can still issue
+  order-clicks); a play/pause indicator + game timer sit in the bottom-right
 - **Esc** — pause menu (Continue game / Restart game)
 - Combat is automatic: the dot punches enemies it **faces** and that are in range
 - Reach the **▼ staircase** to descend to the next (deeper, harder) level
+- On death: **Enter** (or click the button) to restart the run
 
-Planned (see roadmap): **Tab/1–9** switch dot, **left/right-click** orders,
-**E/Q** follow/hold, **Space** mouse-aimed special, **X** swap weapon.
+Planned (see roadmap): **Tab/1–9** switch dot, order keys for the squad,
+mouse-aimed special, **X** swap weapon.
 
 ---
 

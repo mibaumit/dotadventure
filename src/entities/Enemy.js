@@ -44,6 +44,10 @@ export class Enemy extends Phaser.Physics.Arcade.Sprite {
     this.setDepth(1);
     this.setCollideWorldBounds(true);
 
+    // Shrink the physics body to 95% of the sprite so enemies may overlap by
+    // ~5% but can't share the same space (see enemy-vs-enemy collider).
+    this.body.setSize(this.width * 0.95, this.height * 0.95, true);
+
     // Floating level label above the enemy (kept in sync by GameScene).
     this.label = scene.add
       .text(x, y, `Lv ${level}`, { fontFamily: 'monospace', fontSize: '11px', color: '#ffd7d7' })

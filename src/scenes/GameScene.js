@@ -26,6 +26,8 @@ export class GameScene extends Phaser.Scene {
     this.seed = data?.seed ?? 12345;
     this.carryPlayer = data?.player ?? null; // progression carried from above
     this.descending = false; // guards the descend trigger
+    this.gameTime = data?.gameTime ?? 0; // ms of un-frozen play time this run
+    this.frozen = false; // tactical time-freeze (Space)
   }
 
   create() {
@@ -111,6 +113,8 @@ export class GameScene extends Phaser.Scene {
     this.player.weapon = getWeapon('fists');
     this.player.attackTimer = 0; // ms until the next auto-attack is ready
     this.player.attackTarget = null; // enemy currently being boxed (fists face it)
+    this.player.moveTarget = null; // click-to-move destination, or null
+    this.player.focusEnemy = null; // clicked enemy to chase & auto-attack, or null
     this.player.punchToggle = false; // alternates which side-fist punches
     this.player.facing = -Math.PI / 2; // last-moved direction (starts facing up)
     this.player.takeDamage = (amount) => this.damagePlayer(amount);
@@ -202,6 +206,8 @@ export class GameScene extends Phaser.Scene {
 
     this.physics.add.collider(this.enemies, this.walls);
     this.physics.add.collider(this.player, this.enemies);
+    // Enemy-vs-enemy spacing is enforced explicitly in separateEnemies() — the
+    // Arcade collider doesn't reliably push apart enemies moving in lockstep.
   }
 
   setupCamera() {
@@ -214,6 +220,29 @@ export class GameScene extends Phaser.Scene {
     this.keys = this.input.keyboard.addKeys('W,A,S,D');
     this.input.mouse.disableContextMenu(); // free up right-click for later
 
+    // Left-click: an enemy → chase & attack it; the ground → walk there.
+    // (WASD overrides either.)
+    this.input.on('pointerdown', (pointer) => {
+      if (this.player.dead) return;
+      if (!pointer.leftButtonDown()) return;
+
+      const enemy = this.enemyAt(pointer.worldX, pointer.worldY);
+      if (enemy) {
+        this.player.focusEnemy = enemy; // attack order
+        this.player.moveTarget = null;
+        this.showAttackMarker(enemy.x, enemy.y);
+      } else {
+        this.player.focusEnemy = null;
+        this.player.moveTarget = { x: pointer.worldX, y: pointer.worldY };
+        this.showMoveMarker(pointer.worldX, pointer.worldY);
+      }
+    });
+
+    // Space toggles a tactical time-freeze: simulation halts, but you can still
+    // click to issue orders. (Capture it so the page doesn't scroll.)
+    this.input.keyboard.addCapture('SPACE');
+    this.input.keyboard.on('keydown-SPACE', () => this.toggleFreeze());
+
     // Esc opens the pause menu (which pauses this scene underneath).
     this.input.keyboard.on('keydown-ESC', () => {
       if (!this.scene.isPaused()) {
@@ -221,6 +250,61 @@ export class GameScene extends Phaser.Scene {
         this.scene.launch('PauseScene');
       }
     });
+  }
+
+  /** Space: freeze/unfreeze the simulation while leaving order-input live. */
+  toggleFreeze() {
+    if (this.player.dead) return;
+    this.frozen = !this.frozen;
+    if (this.frozen) this.physics.pause();
+    else this.physics.resume();
+  }
+
+  /** A brief expanding ring at a click-to-move destination. */
+  showMoveMarker(x, y) {
+    const ring = this.add
+      .circle(x, y, 6, COLORS.player, 0)
+      .setStrokeStyle(2, COLORS.player, 0.9)
+      .setDepth(0);
+    this.tweens.add({
+      targets: ring,
+      scale: 2.2,
+      alpha: 0,
+      duration: 380,
+      ease: 'Quad.easeOut',
+      onComplete: () => ring.destroy(),
+    });
+  }
+
+  /** A brief red ring marking an attack order placed on an enemy. */
+  showAttackMarker(x, y) {
+    const ring = this.add
+      .circle(x, y, 11, COLORS.enemyMelee, 0)
+      .setStrokeStyle(2, COLORS.enemyMelee, 0.95)
+      .setDepth(2);
+    this.tweens.add({
+      targets: ring,
+      scale: 1.8,
+      alpha: 0,
+      duration: 360,
+      ease: 'Quad.easeOut',
+      onComplete: () => ring.destroy(),
+    });
+  }
+
+  /** Nearest active enemy to a world point, within a small click radius, or null. */
+  enemyAt(x, y) {
+    let best = null;
+    let bestDist = ENEMY.radius + 10;
+    for (const e of this.enemies.getChildren()) {
+      if (!e.active) continue;
+      const d = dist(x, y, e.x, e.y);
+      if (d <= bestDist) {
+        bestDist = d;
+        best = e;
+      }
+    }
+    return best;
   }
 
   /** Fixed on-screen text (doesn't scroll with the world). */
@@ -231,7 +315,7 @@ export class GameScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setDepth(100);
     this.add
-      .text(12, 40, 'WASD move · face a square to punch it · reach the ▼ stairs to descend', style)
+      .text(12, 40, 'WASD/click move · click a square to attack · Space freeze · ▼ descend', style)
       .setScrollFactor(0)
       .setDepth(100);
     this.hudText = this.add
@@ -269,6 +353,14 @@ export class GameScene extends Phaser.Scene {
       .setOrigin(1, 0)
       .setScrollFactor(0)
       .setDepth(101);
+
+    // Bottom-right: game timer above a big play/pause (time-freeze) indicator.
+    this.timeIcon = this.add.graphics().setScrollFactor(0).setDepth(100);
+    this.timerText = this.add
+      .text(0, 0, '', { fontFamily: 'monospace', fontSize: '18px', color: '#cfe6ff' })
+      .setOrigin(0.5, 1)
+      .setScrollFactor(0)
+      .setDepth(100);
   }
 
   // --------------------------------------------------------------------------
@@ -276,16 +368,44 @@ export class GameScene extends Phaser.Scene {
   // --------------------------------------------------------------------------
 
   update(time, delta) {
-    if (!this.player.dead) {
+    // When frozen, the simulation halts but order-input (clicks) stays live.
+    if (!this.frozen && !this.player.dead) {
+      this.gameTime += delta; // timer only advances during un-frozen play
       this.movePlayer();
       this.updateFists(time);
       this.updatePlayerCombat(delta);
       this.checkDescend();
     }
-    this.updateEnemies(delta);
+    if (!this.frozen && !this.player.dead) this.updateEnemies(delta);
+    if (!this.frozen) this.separateEnemies();
+
     this.drawOverlays();
     this.updateXpUi();
     this.updateHud();
+    this.updateTimeIndicator();
+  }
+
+  /** Draw the bottom-right play/pause icon and the mm:ss game timer above it. */
+  updateTimeIndicator() {
+    const cx = this.scale.width - 42;
+    const cy = this.scale.height - 42;
+    const size = 40;
+
+    const g = this.timeIcon;
+    g.clear();
+    if (this.frozen) {
+      g.fillStyle(0xffcf5c, 1); // paused → two amber bars
+      g.fillRect(cx - 16, cy - size / 2, 12, size);
+      g.fillRect(cx + 4, cy - size / 2, 12, size);
+    } else {
+      g.fillStyle(0x57e389, 1); // running → green play triangle
+      g.fillTriangle(cx - 14, cy - size / 2, cx - 14, cy + size / 2, cx + 22, cy);
+    }
+
+    const totalSec = Math.floor(this.gameTime / 1000);
+    const mm = String(Math.floor(totalSec / 60)).padStart(2, '0');
+    const ss = String(totalSec % 60).padStart(2, '0');
+    this.timerText.setPosition(cx + 2, cy - size / 2 - 8).setText(`${mm}:${ss}`);
   }
 
   /** Descend to the next dungeon level when the player reaches the stairs. */
@@ -303,6 +423,7 @@ export class GameScene extends Phaser.Scene {
     this.scene.restart({
       depth: this.depth + 1,
       seed: this.seed,
+      gameTime: this.gameTime, // keep the run timer going
       player: {
         level: p.level,
         xp: p.xp,
@@ -356,6 +477,42 @@ export class GameScene extends Phaser.Scene {
   placeFist(fist, owner, angle, dist) {
     if (fist.punching) return; // its tween owns the position right now
     fist.setPosition(owner.x + Math.cos(angle) * dist, owner.y + Math.sin(angle) * dist);
+  }
+
+  /**
+   * Push apart any enemies that overlap by more than ~5% of their size, so they
+   * never occupy the same space (deterministic — doesn't rely on Arcade's
+   * collision separation, which is unreliable for lockstep-moving bodies).
+   */
+  separateEnemies() {
+    const minDist = UNIT.radius * 2 * 0.95; // allow up to 5% visual overlap
+    const es = this.enemies.getChildren();
+    for (let i = 0; i < es.length; i++) {
+      const a = es[i];
+      if (!a.active) continue;
+      for (let j = i + 1; j < es.length; j++) {
+        const b = es[j];
+        if (!b.active) continue;
+
+        let dx = b.x - a.x;
+        let dy = b.y - a.y;
+        let d = Math.hypot(dx, dy);
+        if (d === 0) {
+          dx = 1; // nudge apart if perfectly stacked
+          dy = 0;
+          d = 1;
+        }
+        if (d < minDist) {
+          const push = (minDist - d) / 2;
+          const nx = dx / d;
+          const ny = dy / d;
+          a.x -= nx * push;
+          a.y -= ny * push;
+          b.x += nx * push;
+          b.y += ny * push;
+        }
+      }
+    }
   }
 
   /** Enemy AI: chase the player when in aggro range, punch when adjacent. */
@@ -439,9 +596,15 @@ export class GameScene extends Phaser.Scene {
       .setText(`${p.xp} / ${p.xpToNext} XP`);
   }
 
-  /** WASD → velocity, normalized so diagonals aren't faster. */
+  /**
+   * Move the dot. WASD is direct control and takes priority (and cancels any
+   * click-move). Otherwise, if a click-to-move target is set, steer toward it,
+   * slowing on approach and stopping when arrived.
+   */
   movePlayer() {
+    const p = this.player;
     const k = this.keys;
+
     let vx = 0;
     let vy = 0;
     if (k.A.isDown) vx -= 1;
@@ -449,12 +612,47 @@ export class GameScene extends Phaser.Scene {
     if (k.W.isDown) vy -= 1;
     if (k.S.isDown) vy += 1;
 
-    const len = Math.hypot(vx, vy);
-    if (len > 0) {
-      vx = (vx / len) * UNIT.speed;
-      vy = (vy / len) * UNIT.speed;
+    if (vx !== 0 || vy !== 0) {
+      p.moveTarget = null; // manual control wins
+      p.focusEnemy = null;
+      const len = Math.hypot(vx, vy);
+      p.setVelocity((vx / len) * UNIT.speed, (vy / len) * UNIT.speed);
+      return;
     }
-    this.player.setVelocity(vx, vy);
+
+    // Attack order: chase the clicked enemy, stop once it's in weapon range.
+    if (p.focusEnemy) {
+      if (!p.focusEnemy.active) {
+        p.focusEnemy = null;
+      } else {
+        const ex = p.focusEnemy.x - p.x;
+        const ey = p.focusEnemy.y - p.y;
+        const d = Math.hypot(ex, ey);
+        if (d <= p.weapon.range) {
+          p.setVelocity(0, 0); // in reach — hold position and let combat swing
+        } else {
+          p.setVelocity((ex / d) * UNIT.speed, (ey / d) * UNIT.speed);
+        }
+        return;
+      }
+    }
+
+    if (p.moveTarget) {
+      const dx = p.moveTarget.x - p.x;
+      const dy = p.moveTarget.y - p.y;
+      const d = Math.hypot(dx, dy);
+      if (d <= UNIT.stopRadius) {
+        p.moveTarget = null;
+        p.setVelocity(0, 0);
+      } else {
+        // Ease down within the arrive radius so it doesn't overshoot.
+        const speed = d < UNIT.arriveRadius ? UNIT.speed * (d / UNIT.arriveRadius) : UNIT.speed;
+        p.setVelocity((dx / d) * speed, (dy / d) * speed);
+      }
+      return;
+    }
+
+    p.setVelocity(0, 0);
   }
 
   /**
@@ -465,7 +663,17 @@ export class GameScene extends Phaser.Scene {
     const p = this.player;
     if (p.attackTimer > 0) p.attackTimer -= delta;
 
-    const target = this.nearestEnemyInArc(p, p.weapon.range, p.facing, UNIT.attackArc);
+    // A clicked (focus) enemy in range takes priority; otherwise auto-target
+    // the nearest enemy in the front-facing arc.
+    let target = null;
+    const f = p.focusEnemy;
+    if (f && f.active && dist(p.x, p.y, f.x, f.y) <= p.weapon.range) {
+      target = f;
+      p.facing = angleBetween(p.x, p.y, f.x, f.y); // face it so the fists box it
+    } else {
+      target = this.nearestEnemyInArc(p, p.weapon.range, p.facing, UNIT.attackArc);
+    }
+
     p.attackTarget = target || null; // drives fist orientation while boxing
     if (target && p.attackTimer <= 0) {
       p.weapon.attack({ scene: this, owner: p, target });
@@ -543,16 +751,20 @@ export class GameScene extends Phaser.Scene {
     return false;
   }
 
-  /** Permadeath: freeze the player and restart the run after a beat. */
+  /** Permadeath: freeze the player and wait for a confirmed restart. */
   onPlayerDead() {
     const p = this.player;
     p.dead = true;
     p.setVelocity(0, 0);
     p.setTint(0x556070);
+    if (this.frozen) {
+      this.frozen = false; // make sure the sim is running for the restart flow
+      this.physics.resume();
+    }
 
     const { width, height } = this.scale;
     this.add
-      .text(width / 2, height / 2, 'You died', {
+      .text(width / 2, height / 2 - 26, 'You died', {
         fontFamily: 'monospace',
         fontSize: '40px',
         color: '#ff6b6b',
@@ -561,7 +773,23 @@ export class GameScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setDepth(200);
 
-    this.time.delayedCall(1400, () => this.scene.restart({ depth: 1, seed: this.seed }));
+    const btn = this.add
+      .text(width / 2, height / 2 + 30, 'Restart (Enter)', {
+        fontFamily: 'monospace',
+        fontSize: '22px',
+        color: '#cfe6ff',
+      })
+      .setOrigin(0.5)
+      .setScrollFactor(0)
+      .setDepth(200)
+      .setPadding(10)
+      .setInteractive({ useHandCursor: true });
+    btn.on('pointerover', () => btn.setColor('#ffffff'));
+    btn.on('pointerout', () => btn.setColor('#cfe6ff'));
+
+    const restart = () => this.scene.restart({ depth: 1, seed: this.seed });
+    btn.on('pointerdown', restart);
+    this.input.keyboard.once('keydown-ENTER', restart); // confirm with Enter
   }
 
   /** Quick scale pop (used on level-up). */
