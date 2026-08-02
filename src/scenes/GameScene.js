@@ -648,6 +648,14 @@ export class GameScene extends Phaser.Scene {
     }
 
     if (p.moveTarget) {
+      // No pathfinding yet: if a wall is blocking the way, stop here instead of
+      // grinding against it.
+      if (!p.body.blocked.none) {
+        p.moveTarget = null;
+        p.setVelocity(0, 0);
+        return;
+      }
+
       const dx = p.moveTarget.x - p.x;
       const dy = p.moveTarget.y - p.y;
       const d = Math.hypot(dx, dy);
