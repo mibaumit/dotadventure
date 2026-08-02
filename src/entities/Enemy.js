@@ -38,6 +38,7 @@ export class Enemy extends Phaser.Physics.Arcade.Sprite {
     this.attackTimer = 0;
     this.attackTarget = null; // the player while punching (fists face it)
     this.alerted = false; // has it seen the player yet? (sight cone)
+    this.announcedAggro = false; // has the aggro growl played for this alert?
     this.punchToggle = false; // alternates which side-fist punches
     this.facing = ((x * 7 + y * 13) % 628) / 100; // varied initial look direction
     this.lookSpeed = ENEMY.lookSpeed * ((x + y) % 2 ? 1 : -1); // sweep dir varies

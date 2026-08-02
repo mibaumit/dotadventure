@@ -119,6 +119,29 @@ function getDistCurve() {
   return distCurve;
 }
 
+/** A short distorted growl for when an enemy notices the player. */
+export function playAggro() {
+  if (!ctx) return;
+  const t = ctx.currentTime;
+  const osc = ctx.createOscillator();
+  osc.type = 'sawtooth';
+  osc.frequency.setValueAtTime(150, t);
+  osc.frequency.exponentialRampToValueAtTime(70, t + 0.22); // snarl downward
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.28, t + 0.02);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.28);
+  const lp = ctx.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.frequency.value = 900;
+  const shaper = ctx.createWaveShaper();
+  shaper.curve = getDistCurve();
+  shaper.oversample = '2x';
+  osc.connect(g).connect(lp).connect(shaper).connect(master);
+  osc.start(t);
+  osc.stop(t + 0.3);
+}
+
 /**
  * Ambient dungeon score (starts once, loops forever): a dark drone pad, plus a
  * distorted string ensemble playing a looping minor-key melody — Diablo-ish.

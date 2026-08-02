@@ -11,10 +11,17 @@
 import { TILE, COLORS, UNIT, ENEMY, GAME } from '../config.js';
 import { generateLevel, WALL, roomCenterTile } from '../levelgen.js';
 import { makeShapeTexture, shapeTextureKey } from '../shapes.js';
-import { makeRng, randInt, dist, angleDelta, angleBetween, clamp } from '../util.js';
+import { makeRng, randInt, dist, angleDelta, angleBetween, clamp, TAU } from '../util.js';
 import { Enemy } from '../entities/Enemy.js';
 import { getWeapon } from '../weapons.js';
-import { ensureStarted, playFootstep, playPunch, cycleVolume, getVolume } from '../sound.js';
+import {
+  ensureStarted,
+  playFootstep,
+  playPunch,
+  playAggro,
+  cycleVolume,
+  getVolume,
+} from '../sound.js';
 
 export class GameScene extends Phaser.Scene {
   constructor() {
@@ -42,6 +49,7 @@ export class GameScene extends Phaser.Scene {
     this.setupInput();
     this.buildHud();
     this.setupOverlay();
+    this.setupFog();
   }
 
   // --------------------------------------------------------------------------
@@ -336,6 +344,114 @@ export class GameScene extends Phaser.Scene {
       .setDepth(100);
   }
 
+  /**
+   * Fog of war on a fine sub-tile grid (GAME.fogCell px) for a smooth, round
+   * reveal. A radius around the dot is revealed (raycast so walls block sight);
+   * cells seen before stay dimly "explored". Drawn above the world/entities so
+   * fogged enemies are hidden.
+   */
+  setupFog() {
+    this.fogCell = GAME.fogCell;
+    this.fogW = Math.ceil(this.worldW / this.fogCell);
+    this.fogH = Math.ceil(this.worldH / this.fogCell);
+    this.explored = Array.from({ length: this.fogH }, () => new Array(this.fogW).fill(false));
+    this.visibleCells = new Set();
+    this.fog = this.add.graphics().setDepth(60);
+    this.lastFogCX = -999;
+    this.lastFogCY = -999;
+    this.markStartRoomExplored(); // the whole first room is revealed up front
+    this.recomputeFog();
+  }
+
+  /** Mark every fog cell inside the starting room as explored. */
+  markStartRoomExplored() {
+    const room = this.level.rooms[0];
+    const c = this.fogCell;
+    const cx0 = Math.floor((room.x * TILE) / c);
+    const cy0 = Math.floor((room.y * TILE) / c);
+    const cx1 = Math.ceil(((room.x + room.w) * TILE) / c);
+    const cy1 = Math.ceil(((room.y + room.h) * TILE) / c);
+    for (let cy = Math.max(0, cy0); cy < Math.min(this.fogH, cy1); cy++) {
+      for (let cx = Math.max(0, cx0); cx < Math.min(this.fogW, cx1); cx++) {
+        this.explored[cy][cx] = true;
+      }
+    }
+  }
+
+  /** Reveal a circular, wall-blocked area around the dot; mark it explored. */
+  recomputeFog() {
+    const c = this.fogCell;
+    const px = this.player.x;
+    const py = this.player.y;
+    const range = GAME.visionTiles * TILE;
+    const RAYS = 160;
+    const step = c * 0.5;
+
+    const vis = this.visibleCells;
+    vis.clear();
+    for (let i = 0; i < RAYS; i++) {
+      const a = (i / RAYS) * TAU;
+      const dx = Math.cos(a);
+      const dy = Math.sin(a);
+      for (let dist = 0; dist <= range; dist += step) {
+        const wx = px + dx * dist;
+        const wy = py + dy * dist;
+        const cx = Math.floor(wx / c);
+        const cy = Math.floor(wy / c);
+        if (cx < 0 || cy < 0 || cx >= this.fogW || cy >= this.fogH) break;
+        vis.add(cy * this.fogW + cx);
+        this.explored[cy][cx] = true;
+
+        const tx = Math.floor(wx / TILE);
+        const ty = Math.floor(wy / TILE);
+        const row = this.level.grid[ty];
+        if (!row || row[tx] === WALL) {
+          if (row) this.revealTile(tx, ty); // show the whole 40px wall block
+          break;
+        }
+      }
+    }
+    this.drawFog();
+  }
+
+  /** Reveal every fog cell overlapping tile (tx,ty) — so walls show full-size. */
+  revealTile(tx, ty) {
+    const c = this.fogCell;
+    const cx0 = Math.max(0, Math.floor((tx * TILE) / c));
+    const cy0 = Math.max(0, Math.floor((ty * TILE) / c));
+    const cx1 = Math.min(this.fogW, Math.ceil(((tx + 1) * TILE) / c));
+    const cy1 = Math.min(this.fogH, Math.ceil(((ty + 1) * TILE) / c));
+    for (let cy = cy0; cy < cy1; cy++) {
+      for (let cx = cx0; cx < cx1; cx++) {
+        this.visibleCells.add(cy * this.fogW + cx);
+        this.explored[cy][cx] = true;
+      }
+    }
+  }
+
+  /** Paint fog: unexplored = black, explored-but-unseen = dim, visible = clear.
+   *  Cells are merged into horizontal runs so we draw few rects. */
+  drawFog() {
+    const g = this.fog;
+    g.clear();
+    const { fogW, fogH, fogCell: c, visibleCells: vis, explored } = this;
+    const stateAt = (cx, cy) => (vis.has(cy * fogW + cx) ? 0 : explored[cy][cx] ? 1 : 2);
+    for (let cy = 0; cy < fogH; cy++) {
+      let cx = 0;
+      while (cx < fogW) {
+        const state = stateAt(cx, cy);
+        if (state === 0) {
+          cx++;
+          continue; // visible → no fog
+        }
+        const start = cx;
+        while (cx < fogW && stateAt(cx, cy) === state) cx++;
+        g.fillStyle(0x05070d, state === 1 ? 0.55 : 1);
+        g.fillRect(start * c, cy * c, (cx - start) * c, c);
+      }
+    }
+  }
+
   /** World-space overlay (health bars, dot level) + fixed top-right XP UI. */
   setupOverlay() {
     this.coneFx = this.add.graphics().setDepth(-2); // sight cones, under the entities
@@ -400,6 +516,15 @@ export class GameScene extends Phaser.Scene {
       for (const e of this.enemies.getChildren()) {
         if (e.active) this.updateFistsFor(e, time, ENEMY.radius);
       }
+    }
+
+    // Fog of war: re-reveal when the dot crosses a fog cell (smooth updates).
+    const fcx = Math.floor(this.player.x / this.fogCell);
+    const fcy = Math.floor(this.player.y / this.fogCell);
+    if (fcx !== this.lastFogCX || fcy !== this.lastFogCY) {
+      this.lastFogCX = fcx;
+      this.lastFogCY = fcy;
+      this.recomputeFog();
     }
 
     this.drawSightCones();
@@ -660,6 +785,14 @@ export class GameScene extends Phaser.Scene {
       if (!e.active) continue;
       if (e.attackTimer > 0) e.attackTimer -= delta;
 
+      // Growl once each time it becomes alerted (by sight or by being hit).
+      if (e.alerted && !e.announcedAggro) {
+        playAggro();
+        e.announcedAggro = true;
+      } else if (!e.alerted) {
+        e.announcedAggro = false;
+      }
+
       if (p.dead) {
         e.setVelocity(0, 0);
         e.attackTarget = null;
@@ -710,16 +843,35 @@ export class GameScene extends Phaser.Scene {
 
     // Player: HP bar + level label above the dot (XP lives in the top-right UI).
     this.drawHealthBar(this.player, UNIT.radius);
+    this.drawFace(this.player, UNIT.radius);
     this.playerLabel
       .setPosition(this.player.x, this.player.y - UNIT.radius - 12)
       .setText(`Lv ${this.player.level}`);
 
-    // Enemies: HP bar + level label each.
+    // Enemies: HP bar + level label + face each.
     for (const e of this.enemies.getChildren()) {
       if (!e.active) continue;
       this.drawHealthBar(e, ENEMY.radius);
+      this.drawFace(e, ENEMY.radius);
       e.label.setPosition(e.x, e.y - ENEMY.radius - 12).setText(`Lv ${e.level}`);
     }
+  }
+
+  /** Draw two little dark eyes on `entity`, looking in its facing direction. */
+  drawFace(entity, radius) {
+    const f = entity.facing ?? 0;
+    const fwd = radius * 0.42; // eyes sit toward the front
+    const spread = radius * 0.4; // sideways gap between eyes
+    const ex = entity.x + Math.cos(f) * fwd;
+    const ey = entity.y + Math.sin(f) * fwd;
+    const px = Math.cos(f + Math.PI / 2) * spread;
+    const py = Math.sin(f + Math.PI / 2) * spread;
+    const r = Math.max(2, radius * 0.17);
+
+    const g = this.fx;
+    g.fillStyle(0x0d1019, 1); // dark eyes
+    g.fillCircle(ex + px, ey + py, r);
+    g.fillCircle(ex - px, ey - py, r);
   }
 
   /** Draw a small HP bar centered above an entity. */

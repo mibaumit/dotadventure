@@ -75,5 +75,7 @@ export const GAME = {
   tilesH: 32,
   recruitsPerLevel: 2, // neutral ally dots placed in each level
   healOnDescend: true, // survivors refill HP when you clear a level
+  visionTiles: 5, // fog-of-war reveal radius around the dot (in tiles)
+  fogCell: 16, // fog resolution in px (smaller = finer, rounder reveal)
 };
 
