@@ -48,7 +48,7 @@ export class GameScene extends Phaser.Scene {
     this.spawnPlayer();
     this.spawnEnemies();
     this.hotbar = this.carryHotbar ?? []; // up to 9 {id, count} slots
-    this.spawnItems();
+    this.spawnChest();
     this.setupCamera();
     this.setupInput();
     this.buildHud();
@@ -272,21 +272,43 @@ export class GameScene extends Phaser.Scene {
     // Arcade collider doesn't reliably push apart enemies moving in lockstep.
   }
 
-  /** Scatter a few item/spell pickups across the level's rooms. */
-  spawnItems() {
+  /**
+   * Place one treasure chest in a random non-start room. Items come ONLY from
+   * chests (and monster drops) — no scattered floor loot.
+   */
+  spawnChest() {
     this.pickups = this.physics.add.group();
-    const rng = makeRng(this.seed + this.depth * 3301);
-
-    for (let i = 1; i < this.level.rooms.length; i++) {
-      if (rng() > 0.55) continue; // not every room has loot
-      const room = this.level.rooms[i];
-      const tx = randInt(rng, room.x, room.x + room.w - 1);
-      const ty = randInt(rng, room.y, room.y + room.h - 1);
-      const id = ITEM_IDS[randInt(rng, 0, ITEM_IDS.length - 1)];
-      this.createPickup((tx + 0.5) * TILE, (ty + 0.5) * TILE, id);
-    }
-
     this.physics.add.overlap(this.player, this.pickups, (_p, pickup) => this.collectItem(pickup));
+
+    this.chestRng = makeRng(this.seed + this.depth * 6151);
+    const rooms = this.level.rooms;
+    if (rooms.length < 2) return;
+
+    const room = rooms[1 + randInt(this.chestRng, 0, rooms.length - 2)];
+    const c = roomCenterTile(room);
+    const chest = this.physics.add
+      .sprite((c.tx + 0.5) * TILE, (c.ty + 0.5) * TILE, 'chest')
+      .setDepth(0);
+    chest.setImmovable(true);
+    chest.opened = false;
+    this.chest = chest;
+    this.physics.add.overlap(this.player, chest, () => this.openChest());
+  }
+
+  /** Open the chest on touch: pop its items out as pickups the player grabs. */
+  openChest() {
+    const chest = this.chest;
+    if (!chest || chest.opened) return;
+    chest.opened = true;
+    chest.setTint(0x6b7280); // greyed = looted
+
+    // Depth 1 has a fixed starter loadout; deeper levels are random.
+    const contents =
+      this.depth === 1 ? ['potion', 'frost'] : [ITEM_IDS[randInt(this.chestRng, 0, ITEM_IDS.length - 1)]];
+    contents.forEach((id, i) => {
+      const dx = (i - (contents.length - 1) / 2) * 18;
+      this.createPickup(chest.x + dx, chest.y - 6, id);
+    });
   }
 
   /** Create a floating item pickup on the ground (from a room or a monster drop). */
