@@ -350,9 +350,40 @@ export function playAggro() {
 const MUSIC_TRACKS = [startDungeonScore, startPulseScore, startCrystalScore];
 
 /** Start the current music track (idempotent — no-op if one is already playing). */
-function startMusic() {
+export function startMusic() {
   if (!ctx || currentTrack) return;
   currentTrack = MUSIC_TRACKS[musicTrackIndex]();
+}
+
+/** Stop the background music entirely (e.g. while the game is paused). */
+export function stopMusic() {
+  if (currentTrack) {
+    currentTrack.stop();
+    currentTrack = null;
+  }
+}
+
+/** A soft descending two-tone "blip" — played when the game is paused. */
+export function playPause() {
+  if (!ctx) return;
+  const t = ctx.currentTime;
+  const notes = [
+    [523.25, 0], // C5
+    [349.23, 0.1], // F4 — a gentle step down
+  ];
+  for (const [freq, dt] of notes) {
+    const s = t + dt;
+    const osc = ctx.createOscillator();
+    const g = ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, s);
+    g.gain.exponentialRampToValueAtTime(0.25, s + 0.015);
+    g.gain.exponentialRampToValueAtTime(0.0001, s + 0.16);
+    osc.connect(g).connect(sfxBus);
+    osc.start(s);
+    osc.stop(s + 0.18);
+  }
 }
 
 /** Stop the current track and start the next one (wraps). Returns the new index. */

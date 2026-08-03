@@ -51,7 +51,7 @@ export const ITEMS = {
     shape: 'bomb', // custom icon: black circle + fuse (baked in GameScene.buildTextures)
     color: 0x4a4a55, // dark accent (icon art is drawn black, not tinted)
     kind: 'cooldown',
-    desc: 'Press its number to drop a bomb where you stand. It detonates after 2s for area damage. Only one at a time; 5s cooldown.',
+    desc: 'Press its number to drop a bomb where you stand. It detonates after 2s for area damage. Run into it to bowl it across the room. 3s cooldown.',
     cooldownMs: BOMB.cooldown,
     // Reusable; never consumed. Drops a timed bomb rather than blasting instantly.
     use(scene) {

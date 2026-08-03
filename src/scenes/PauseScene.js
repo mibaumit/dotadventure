@@ -11,6 +11,7 @@ import {
   setMusicVolume,
   getSfxVolume,
   setSfxVolume,
+  startMusic,
 } from '../sound.js';
 import { attachSliderDrag, makeVolumeSlider } from '../ui.js';
 
@@ -90,12 +91,14 @@ export class PauseScene extends Phaser.Scene {
 
   /** Close the menu and un-pause the game underneath. */
   resumeGame() {
+    startMusic(); // bring the background track back
     this.scene.resume('GameScene');
     this.scene.stop();
   }
 
   /** Restart the whole run from depth 1 with a fresh random dungeon. */
   restartGame() {
+    startMusic(); // paused-off music resumes for the fresh run
     this.scene.stop();
     const seed = Math.floor(Math.random() * 0x7fffffff);
     this.scene.start('GameScene', { depth: 1, seed });
@@ -103,6 +106,7 @@ export class PauseScene extends Phaser.Scene {
 
   /** Abandon the run and return to the title screen. */
   mainMenu() {
+    startMusic(); // restore music before handing off to the title screen
     this.scene.stop('GameScene');
     this.scene.stop();
     this.scene.start('StartScene');

@@ -67,12 +67,18 @@ export const COMBAT = {
   swingDuration: 150, // ms a melee swing arc stays visible
 };
 
-// On-hit effect of a fists punch landing on an enemy.
+// On-hit effect of a fists punch landing on an enemy. Punchy: a real stagger
+// (40% slow for a quarter-second) plus a shove you can see. The knockback is
+// wall-clamped in fistImpact() so enemies never get pushed through geometry.
 export const FISTS = {
-  slowMult: 0.8, // brief 20% slow…
-  slowDuration: 100, // …for 0.1 s
-  knockback: 1, // px the enemy is shoved back
+  slowMult: 0.6, // 40% slow…
+  slowDuration: 250, // …for 0.25 s
+  knockback: 8, // px the enemy is shoved back
 };
+
+// Global attack-pace scalar. >1 = slower attacks. 1.25 makes every dot (yours
+// AND enemies') attack 20% less often, for a calmer, more readable tempo.
+export const ATTACK_COOLDOWN_MULT = 1.25;
 
 export const PROJECTILE = {
   radius: 4,
@@ -116,12 +122,19 @@ export const SHIELD = {
 };
 
 // The Bomb: a reusable action-bar item (not consumed). Using it DROPS a bomb
-// that ticks for `fuse` ms then explodes. Only one may be down at a time.
+// that ticks for `fuse` ms then explodes. You can stack several at once — the
+// only limit is the recharge between drops.
 export const BOMB = {
-  cooldown: 5000, // ms between uses
+  cooldown: 3000, // ms between uses
   fuse: 2000, // ms from drop to detonation
   radius: 120, // blast radius (px)
   damage: 3,
+  // Rolling physics — shove a dropped bomb like a bowling ball by running into
+  // it. The harder you run in, the faster it rolls; drag coasts it to a stop.
+  push: 1.15, // bomb takes this × your closing speed on contact
+  drag: 240, // px/s² rolling friction (how quickly it slows)
+  maxSpeed: 520, // px/s cap on roll speed
+  bounce: 0.45, // liveliness off walls and other bombs
 };
 
 // The Scroll of Frozen Orb: an AoE that damages AND chills enemies (slows them).

@@ -8,7 +8,7 @@
 // this file is structured so those systems each become their own small method.
 // ============================================================================
 
-import { TILE, COLORS, UNIT, ENEMY, GAME, HOTBAR, BOW, BOMB, POTION, MANA, PIXEL, PROJECTILE, SHIELD, FROST, FISTS, LEVELUP } from '../config.js';
+import { TILE, COLORS, UNIT, ENEMY, GAME, HOTBAR, BOW, BOMB, POTION, MANA, PIXEL, PROJECTILE, SHIELD, FROST, FISTS, ATTACK_COOLDOWN_MULT, LEVELUP } from '../config.js';
 import { generateLevel, WALL, roomCenterTile } from '../levelgen.js';
 import { makeShapeTexture, shapeTextureKey } from '../shapes.js';
 import { makeRng, randInt, dist, angleDelta, angleBetween, clamp, TAU, pick } from '../util.js';
@@ -27,6 +27,8 @@ import {
   playExplosion,
   cycleVolume,
   cycleMusic,
+  stopMusic,
+  playPause,
 } from '../sound.js';
 import {
   drawSoundIcon as renderSoundIcon,
@@ -43,13 +45,17 @@ export class GameScene extends Phaser.Scene {
   init(data) {
     this.depth = data?.depth ?? 1;
     this.seed = data?.seed ?? 12345;
+    this.arriveAt = data?.arriveAt ?? 'start'; // 'start' (came down) or 'exit' (came back up)
     this.carryPlayer = data?.player ?? null; // progression carried from above
-    this.descending = false; // guards the descend trigger
+    this.transitioning = false; // guards the stairs trigger during a level change
+    this.exitArmed = false; // must step OFF a staircase before it can fire — set once
+    this.entranceArmed = false; //   the player has walked clear of that staircase
     this.gameTime = data?.gameTime ?? 0; // ms of un-frozen play time this run
     this.frozen = false; // tactical time-freeze (Space)
     this.stepTimer = 0; // footstep-sound cadence
     this.carryHotbar = data?.hotbar ?? null; // action-bar items carried down
     this.foundItems = new Set(data?.foundItems ?? []); // items already looted this run
+    this.lootedChests = new Set(data?.lootedChests ?? []); // depths whose chest is opened
   }
 
   create() {
@@ -60,6 +66,7 @@ export class GameScene extends Phaser.Scene {
     this.buildExit();
     this.buildEntranceStairs();
     this.spawnPlayer();
+    this.setupBombPhysics();
     this.spawnEnemies();
     this.hotbar = this.carryHotbar ?? []; // up to 9 {id, count} slots
     this.spawnChest();
@@ -247,10 +254,14 @@ export class GameScene extends Phaser.Scene {
     this.physics.world.setBounds(0, 0, this.worldW, this.worldH);
   }
 
-  /** Create the player dot at the level's (safe) start point. */
+  /**
+   * Create the player dot. Normally at the level's start (the up-stairs you came
+   * down); when climbing BACK up from below, emerge at this level's down-stairs.
+   */
   spawnPlayer() {
-    const x = (this.level.start.tx + 0.5) * TILE;
-    const y = (this.level.start.ty + 0.5) * TILE;
+    const at = this.arriveAt === 'exit' ? this.level.exit : this.level.start;
+    const x = (at.tx + 0.5) * TILE;
+    const y = (at.ty + 0.5) * TILE;
 
     this.player = this.physics.add.sprite(x, y, 'dot');
     this.player.setTint(COLORS.player);
@@ -307,6 +318,7 @@ export class GameScene extends Phaser.Scene {
     this.player.fistR = this.makeFist();
 
     this.physics.add.collider(this.player, this.walls);
+    this.player.setVelocity(0, 0); // arrive at rest, squarely on the staircase
   }
 
   /** Draw the descent staircase at the level's exit and record its position. */
@@ -341,12 +353,14 @@ export class GameScene extends Phaser.Scene {
 
   /**
    * Draw an "up" staircase at the spawn point on stages below the first — the
-   * stairs you just came down. Cosmetic for now (ascending isn't wired yet).
+   * stairs you came down. Stepping onto it climbs back one level (see checkStairs).
    */
   buildEntranceStairs() {
-    if (this.depth <= 1) return; // stage 1 has no stairs above it
+    this.entrance = null; // stage 1 has no way up
+    if (this.depth <= 1) return;
     const sx = (this.level.start.tx + 0.5) * TILE;
     const sy = (this.level.start.ty + 0.5) * TILE;
+    this.entrance = { x: sx, y: sy };
 
     const s = TILE * 0.72;
     const g = this.add.graphics().setDepth(-3);
@@ -389,9 +403,13 @@ export class GameScene extends Phaser.Scene {
     this.projectiles = this.add.group();
     const rng = makeRng(this.seed + this.depth * 7919);
 
-    // Keep a buffer around the start so nothing can aggro the player instantly.
+    // Keep a buffer around BOTH staircases so nothing can aggro the player the
+    // instant they arrive — whether they came down to the up-stairs (start) or
+    // climbed back up to the down-stairs (exit). Both are safe landing zones.
     const startX = (this.level.start.tx + 0.5) * TILE;
     const startY = (this.level.start.ty + 0.5) * TILE;
+    const exitX = (this.level.exit.tx + 0.5) * TILE;
+    const exitY = (this.level.exit.ty + 0.5) * TILE;
     const safeRadius = ENEMY.aggroRange + 80;
 
     // rooms[0] is the player's start room — leave it clear.
@@ -404,7 +422,8 @@ export class GameScene extends Phaser.Scene {
         if (this.level.grid[ty]?.[tx] === WALL) continue; // never spawn inside a wall
         const px = (tx + 0.5) * TILE;
         const py = (ty + 0.5) * TILE;
-        if (dist(px, py, startX, startY) < safeRadius) continue; // too near the start
+        if (dist(px, py, startX, startY) < safeRadius) continue; // too near the up-stairs
+        if (dist(px, py, exitX, exitY) < safeRadius) continue; // too near the down-stairs
 
         const level = randInt(rng, 1, this.depth); // tougher enemies deeper down
         const enemy = new Enemy(this, px, py, { shape: 'square', level });
@@ -433,6 +452,10 @@ export class GameScene extends Phaser.Scene {
     this.pixels = this.physics.add.group();
     this.physics.add.overlap(this.player, this.pixels, (_p, px) => this.collectPixel(px));
 
+    // A chest opened on a previous visit stays looted — don't respawn it when
+    // the player climbs back down to this depth (enemies do respawn; chests don't).
+    if (this.lootedChests.has(this.depth)) return;
+
     this.chestRng = makeRng(this.seed + this.depth * 6151);
     const rooms = this.level.rooms;
     const ex = this.level.exit;
@@ -456,6 +479,7 @@ export class GameScene extends Phaser.Scene {
     const chest = this.chest;
     if (!chest || chest.opened) return;
     chest.opened = true;
+    this.lootedChests.add(this.depth); // never respawn this chest on a return visit
     chest.setTint(0x6b7280); // greyed = looted
 
     // One item, from this depth's pool minus anything already picked up this run
@@ -758,6 +782,8 @@ export class GameScene extends Phaser.Scene {
   /** Open the pause menu (pausing this scene underneath), if not already open. */
   openPause() {
     if (this.player.dead || this.modalOpen || this.scene.isPaused()) return;
+    stopMusic(); // silence the background track while paused…
+    playPause(); // …with a soft blip to mark the pause
     this.scene.pause();
     this.scene.launch('PauseScene');
   }
@@ -836,6 +862,9 @@ export class GameScene extends Phaser.Scene {
   buildHud() {
     this.menuIcon = this.add.graphics().setScrollFactor(0).setDepth(100);
     this.menuRect = { x: 0, y: 0, w: 0, h: 0 };
+
+    // Top-left player avatar (portrait + HP/mana bars) — see drawAvatar.
+    this.avatarFx = this.add.graphics().setScrollFactor(0).setDepth(100);
   }
 
   /** Draw the top-left ☰ menu button (opens the pause menu) + its tap area. */
@@ -853,6 +882,50 @@ export class GameScene extends Phaser.Scene {
     g.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
     g.fillStyle(0xcfe6ff, 0.9);
     for (let i = 0; i < 3; i++) g.fillRect(x + 9, y + 9 + i * 6, w - 18, 2); // ☰
+  }
+
+  /**
+   * Top-left player unit frame, tucked beneath the ☰ button: a portrait of the
+   * dot with a level badge, and the player's HP bar directly below it. This is
+   * where the character's level and health live now (they're off the dot body).
+   */
+  drawAvatar() {
+    const g = this.avatarFx;
+    g.clear();
+    const p = this.player;
+    const size = 46;
+    const x = 12;
+    const y = 52; // just under the menu button (which ends at y≈44)
+
+    // Portrait frame.
+    g.fillStyle(0x0d1420, 0.72);
+    g.fillRect(x, y, size, size);
+    g.lineStyle(1, 0x2a3350, 1);
+    g.strokeRect(x + 0.5, y + 0.5, size - 1, size - 1);
+
+    // Character portrait: the player dot with two dark eyes.
+    const cx = x + size / 2;
+    const cy = y + size / 2 - 1;
+    const r = size * 0.3;
+    g.fillStyle(COLORS.player, 1);
+    g.fillCircle(cx, cy, r);
+    const eo = r * 0.42;
+    g.fillStyle(0x0d1019, 1);
+    g.fillCircle(cx - eo, cy + r * 0.12, Math.max(2, r * 0.17));
+    g.fillCircle(cx + eo, cy + r * 0.12, Math.max(2, r * 0.17));
+
+    // HP bar directly below the portrait, same width.
+    const hbY = y + size + 3;
+    const hbH = 9;
+    const pct = clamp(p.hp / p.maxHp, 0, 1);
+    g.fillStyle(COLORS.hpBack, 0.6);
+    g.fillRect(x - 1, hbY - 1, size + 2, hbH + 2);
+    g.fillStyle(pct > 0.3 ? COLORS.hpGood : COLORS.hpLow, 1);
+    g.fillRect(x, hbY, size * pct, hbH);
+
+    // Anchor for the mana bar, which stacks directly beneath the HP bar. (The
+    // bars read by colour/fill; exact HP/MP numbers live on the pause screen.)
+    this.avatarBox = { x, w: size, manaY: hbY + hbH + 3 };
   }
 
   /** Status + controls lines shown on the pause screen (see PauseScene). */
@@ -1005,8 +1078,11 @@ export class GameScene extends Phaser.Scene {
       .setOrigin(1, 0)
       .setScrollFactor(0)
       .setDepth(100);
+    // Empty "tube": a dark translucent track with an amber outline so the bar is
+    // always visible even at 0 XP; the amber fill grows inside it.
     this.xpBarBg = this.add
-      .rectangle(0, 0, 170, 10, COLORS.hpBack, 0.5)
+      .rectangle(0, 0, 170, 10, 0x000000, 0.45)
+      .setStrokeStyle(1, COLORS.xp, 0.6)
       .setOrigin(0, 0)
       .setScrollFactor(0)
       .setDepth(100);
@@ -1016,10 +1092,16 @@ export class GameScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setDepth(101);
     this.xpText = this.add
-      .text(0, 0, '', { fontFamily: 'monospace', fontSize: '12px', color: '#cfe6ff' })
-      .setOrigin(1, 0)
+      .text(0, 0, '', {
+        fontFamily: 'monospace',
+        fontSize: '11px',
+        color: '#ffffff',
+        stroke: '#0d1019',
+        strokeThickness: 3,
+      })
+      .setOrigin(0.5, 0.5)
       .setScrollFactor(0)
-      .setDepth(101);
+      .setDepth(102);
 
     // Mana bar (blue) sits just under the XP bar — only shown while a mana item
     // is held (see updateManaUi). Starts hidden.
@@ -1036,10 +1118,16 @@ export class GameScene extends Phaser.Scene {
       .setDepth(101)
       .setVisible(false);
     this.manaText = this.add
-      .text(0, 0, '', { fontFamily: 'monospace', fontSize: '12px', color: '#bfe6ff' })
-      .setOrigin(1, 0)
+      .text(0, 0, '', {
+        fontFamily: 'monospace',
+        fontSize: '9px',
+        color: '#ffffff',
+        stroke: '#0d1019',
+        strokeThickness: 2,
+      })
+      .setOrigin(0.5, 0.5)
       .setScrollFactor(0)
-      .setDepth(101)
+      .setDepth(102)
       .setVisible(false);
 
     // Bottom-left: clickable sound icon (cycles volume: full → half → mute).
@@ -1233,7 +1321,7 @@ export class GameScene extends Phaser.Scene {
       this.movePlayer(delta);
       this.updateFistsFor(this.player, time, UNIT.radius);
       this.updatePlayerCombat(delta);
-      this.checkDescend();
+      this.checkStairs();
       this.updateFootsteps(delta);
     }
     if (!this.frozen && !this.player.dead) this.updateEnemies(delta);
@@ -1261,6 +1349,7 @@ export class GameScene extends Phaser.Scene {
     this.updateXpUi();
     this.updateManaUi();
     this.drawMenuButton();
+    this.drawAvatar();
     this.updateTimeIndicator();
     this.drawSoundIcon();
     this.drawMusicIcon();
@@ -1335,25 +1424,48 @@ export class GameScene extends Phaser.Scene {
     this.timerText.setPosition(cx + 2, cy - size / 2 - 8).setText(`${mm}:${ss}`);
   }
 
-  /** Descend to the next dungeon level when the player reaches the stairs. */
-  checkDescend() {
-    if (this.descending) return;
-    if (dist(this.player.x, this.player.y, this.exit.x, this.exit.y) < TILE * 0.55) {
-      this.descend();
+  /**
+   * Ride the stairs. Either staircase only fires once the player has first
+   * stepped OFF it (so arriving on a staircase doesn't instantly re-trigger):
+   * reaching the down-stairs descends a level, the up-stairs climbs back one.
+   */
+  checkStairs() {
+    if (this.transitioning) return;
+    const p = this.player;
+    const reach = TILE * 0.55; // step onto a staircase to use it…
+    const armDist = TILE * 1.5; // …but it only arms once you've clearly walked off it
+
+    // Down-stairs (always present).
+    const dExit = dist(p.x, p.y, this.exit.x, this.exit.y);
+    if (dExit > armDist) this.exitArmed = true;
+    else if (dExit < reach && this.exitArmed) return void this.goToLevel(this.depth + 1, 'start');
+
+    // Up-stairs (stages below the first only).
+    if (this.entrance) {
+      const dEnt = dist(p.x, p.y, this.entrance.x, this.entrance.y);
+      if (dEnt > armDist) this.entranceArmed = true;
+      else if (dEnt < reach && this.entranceArmed) return void this.goToLevel(this.depth - 1, 'exit');
     }
   }
 
-  /** Rebuild the scene one level deeper, carrying the player's progression. */
-  descend() {
-    this.descending = true;
+  /**
+   * Rebuild the scene at `newDepth`, carrying the run's progression. `arriveAt`
+   * is where the player emerges: 'start' (the up-stairs) when descending, 'exit'
+   * (the down-stairs) when climbing back up. Enemies regenerate every visit;
+   * chests already opened (lootedChests) stay gone.
+   */
+  goToLevel(newDepth, arriveAt) {
+    this.transitioning = true;
     cycleMusic(); // fresh background track for the new stage
     const p = this.player;
     this.scene.restart({
-      depth: this.depth + 1,
+      depth: newDepth,
       seed: this.seed,
+      arriveAt,
       gameTime: this.gameTime, // keep the run timer going
-      hotbar: this.hotbar, // carry collected items down
+      hotbar: this.hotbar, // carry collected items between levels
       foundItems: [...this.foundItems], // items already looted stay out of future chests
+      lootedChests: [...this.lootedChests], // opened chests never respawn
       player: {
         level: p.level,
         xp: p.xp,
@@ -1627,7 +1739,7 @@ export class GameScene extends Phaser.Scene {
         e.attackTarget = p; // fists box the player
         if (e.attackTimer <= 0) {
           e.weapon.attack({ scene: this, owner: e, target: p });
-          e.attackTimer = e.weapon.cooldown;
+          e.attackTimer = e.weapon.cooldown * ATTACK_COOLDOWN_MULT;
         }
       } else {
         const sp = e.slowTimer > 0 ? e.speed * e.slowMult : e.speed; // slowed?
@@ -1641,13 +1753,14 @@ export class GameScene extends Phaser.Scene {
   drawOverlays() {
     this.fx.clear();
 
-    // Player: HP bar + level label above the dot (XP lives in the top-right UI).
+    // Player: HP bar floats above the dot (mirrored on the avatar frame too);
+    // the level number is gone from the body — it lives on the avatar now.
+    this.drawBowDeadzone(this.player); // red no-shoot ring when a foe is point-blank
     this.drawHealthBar(this.player, UNIT.radius);
     this.drawFace(this.player, UNIT.radius);
     this.drawEquipment(this.player);
     this.drawBowCooldown(this.player);
     this.drawShieldCooldown(this.player);
-    this.placeLevelNumber(this.playerLabel, this.player, UNIT.radius);
 
     // Enemies: HP bar + level number + face each.
     for (const e of this.enemies.getChildren()) {
@@ -1809,6 +1922,29 @@ export class GameScene extends Phaser.Scene {
     g.fillCircle(ex - px, ey - py, r);
   }
 
+  /**
+   * When a bow is equipped and a foe has slipped inside BOW.minRange — the range
+   * where the bow can't fire and the dot falls back to fists — ring that dead
+   * zone in translucent red so the player sees the gap they need to keep.
+   */
+  drawBowDeadzone(p) {
+    if (p.weapon.id !== 'bow') return;
+    const r = BOW.minRange;
+    let foeClose = false;
+    for (const e of this.enemies.getChildren()) {
+      if (e.active && dist(p.x, p.y, e.x, e.y) < r) {
+        foeClose = true;
+        break;
+      }
+    }
+    if (!foeClose) return;
+    const g = this.fx;
+    g.fillStyle(0xff3b3b, 0.1);
+    g.fillCircle(p.x, p.y, r);
+    g.lineStyle(1.5, 0xff5a5a, 0.5);
+    g.strokeCircle(p.x, p.y, r);
+  }
+
   /** Draw a small HP bar centered above an entity. */
   drawHealthBar(entity, radius) {
     const w = radius * 2;
@@ -1824,26 +1960,45 @@ export class GameScene extends Phaser.Scene {
     g.fillRect(x, y, w * pct, h);
   }
 
-  /** Reposition + refill the fixed top-right XP bar and level readout. */
+  /**
+   * Top-right Stage/Level readouts, plus a WoW-style XP bar spanning the full
+   * width of the action bar and sitting just above it. The bar shares the
+   * hotbar's geometry (see drawHotbar) so the two always line up.
+   */
   updateXpUi() {
     const p = this.player;
-    const margin = 14;
-    const barW = 170;
-    const barH = 10;
-    const x = this.scale.width - margin - barW;
-    const right = this.scale.width - margin;
-    const yBar = 62; // XP bar pushed down to make room for the Stage line
-
+    const right = this.scale.width - 14;
     this.stageText.setPosition(right, 10).setText(`Stage ${this.depth}`); // dungeon depth
-    this.levelText.setPosition(right, 38).setText(`Level ${p.level}`); // character level
-    this.xpBarBg.setPosition(x, yBar);
-    this.xpBarFill.setPosition(x, yBar).setDisplaySize(barW * clamp(p.xp / p.xpToNext, 0, 1), barH);
-    this.xpText.setPosition(right, yBar + barH + 3).setText(`${p.xp} / ${p.xpToNext} XP`);
+
+    // Match the action bar's span exactly.
+    const n = HOTBAR.slots;
+    const gap = 5;
+    const slot = this.hotbarSlotSize();
+    const totalW = n * slot + (n - 1) * gap;
+    const x = Math.round(this.scale.width / 2 - totalW / 2);
+    const barH = 13;
+    const hotbarTop = this.scale.height - slot - 8;
+    const yBar = hotbarTop - barH - 5; // rest just above the slots
+
+    // "Level X" sits just above the XP bar (centered on it).
+    this.levelText
+      .setOrigin(0.5, 1)
+      .setPosition(x + totalW / 2, yBar - 3)
+      .setText(`Level ${p.level}`);
+
+    this.xpBarBg.setPosition(x, yBar).setDisplaySize(totalW, barH);
+    this.xpBarFill.setPosition(x, yBar).setDisplaySize(totalW * clamp(p.xp / p.xpToNext, 0, 1), barH);
+    this.xpText
+      .setOrigin(0.5, 0.5)
+      .setPosition(x + totalW / 2, yBar + barH / 2)
+      .setText(`${p.xp} / ${p.xpToNext} XP`);
+    this.xpBarY = yBar;
   }
 
   /**
-   * Position + fill the blue mana bar under the XP readout. Hidden entirely
-   * unless the player holds a mana-cost item (it's the item that "reveals" it).
+   * Position + fill the blue mana bar, tucked into the avatar frame directly
+   * below the player's HP bar (same width). Hidden entirely unless the player
+   * holds a mana-cost item (it's the item that "reveals" it).
    */
   updateManaUi() {
     const show = this.hasManaItem();
@@ -1853,17 +2008,13 @@ export class GameScene extends Phaser.Scene {
     if (!show) return;
 
     const p = this.player;
-    const margin = 14;
-    const barW = 170;
-    const barH = 8;
-    const x = this.scale.width - margin - barW;
-    const yBar = 100; // just below the XP bar (62) + its value text
-
-    this.manaBarBg.setPosition(x, yBar);
-    this.manaBarFill.setPosition(x, yBar).setDisplaySize(barW * clamp(p.mana / p.maxMana, 0, 1), barH);
-    this.manaText
-      .setPosition(this.scale.width - margin, yBar + barH + 3)
-      .setText(`${Math.round(p.mana)} / ${p.maxMana} MP`);
+    // Falls in step with drawAvatar's geometry (x=12, size=46, HP bar bottom).
+    const box = this.avatarBox ?? { x: 12, w: 46, manaY: 113 };
+    const barH = 7;
+    this.manaBarBg.setPosition(box.x, box.manaY).setDisplaySize(box.w, barH);
+    this.manaBarFill
+      .setPosition(box.x, box.manaY)
+      .setDisplaySize(box.w * clamp(p.mana / p.maxMana, 0, 1), barH);
   }
 
   /**
@@ -1990,8 +2141,8 @@ export class GameScene extends Phaser.Scene {
     p.attackTarget = target || null; // drives fist orientation + bow reticle
     if (target && p.attackTimer <= 0) {
       weapon.attack({ scene: this, owner: p, target });
-      p.attackTimer = weapon.cooldown;
-      p.attackCooldownMax = weapon.cooldown;
+      p.attackTimer = weapon.cooldown * ATTACK_COOLDOWN_MULT;
+      p.attackCooldownMax = p.attackTimer;
       if (ranged) p.bowDraw = 1; // kick off the string/hand release animation
     }
   }
@@ -2033,6 +2184,8 @@ export class GameScene extends Phaser.Scene {
     }
     if (killed) {
       if (target.faction === 'enemy') {
+        // Floating "+N XP" reward (amber), offset from the white damage number.
+        this.showDamageNumber(tx + 16, ty + 6, `+${target.level} XP`, '#ffcf5c');
         this.grantXp(target.level);
         this.dropPixels(tx, ty);
       }
@@ -2312,17 +2465,50 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  /** Drop a ticking bomb at (x,y). Only one may be live at a time. */
+  /**
+   * Bombs are physics bodies you can shove around. One-time world colliders so
+   * a rolling bomb stops at walls and clacks off other bombs.
+   */
+  setupBombPhysics() {
+    this.bombGroup = this.physics.add.group();
+    this.physics.add.collider(this.bombGroup, this.walls);
+    this.physics.add.collider(this.bombGroup, this.bombGroup);
+  }
+
+  /** Drop a ticking, rollable bomb at (x,y). Multiple bombs can be live at once. */
   placeBomb(x, y) {
-    if (this.bombs.length > 0) return; // one bomb at a time
-    const sprite = this.add.image(x, y, 'bomb_body').setScale(1.6).setDepth(1);
+    const sprite = this.bombGroup.create(x, y, 'bomb_body').setScale(1.6).setDepth(1);
+    sprite.body.setCircle(7, 3, 5); // ball is drawn at (10,12) r=7 in the 20×20 frame
+    sprite.setDrag(BOMB.drag);
+    sprite.setMaxVelocity(BOMB.maxSpeed);
+    sprite.setBounce(BOMB.bounce);
     this.bombs.push({ sprite, fuse: BOMB.fuse });
   }
 
-  /** Tick dropped-bomb fuses; detonate at 0. (The burning fuse is drawn separately.) */
+  /**
+   * Tick dropped-bomb fuses (detonate at 0) and let the player bowl them: when
+   * you're touching a bomb and moving toward it, it rolls off in that direction
+   * at a speed set by how hard you ran in. Drag then coasts it to a stop.
+   */
   updateBombs(delta) {
+    const p = this.player;
+    const pv = p.body.velocity;
+    const pSpeed = Math.hypot(pv.x, pv.y);
+    const contact = UNIT.radius + 11 + 2; // dot radius + bomb ball radius + slack
     for (let i = this.bombs.length - 1; i >= 0; i--) {
       const b = this.bombs[i];
+      if (pSpeed > 5) {
+        const dx = b.sprite.x - p.x;
+        const dy = b.sprite.y - p.y;
+        const d = Math.hypot(dx, dy) || 1;
+        if (d < contact) {
+          const closing = (pv.x * dx + pv.y * dy) / d; // run speed toward the bomb
+          if (closing > 0) {
+            const roll = closing * BOMB.push;
+            b.sprite.setVelocity((dx / d) * roll, (dy / d) * roll);
+          }
+        }
+      }
       b.fuse -= delta;
       if (b.fuse <= 0) {
         this.explodeBomb(b);
@@ -2380,13 +2566,49 @@ export class GameScene extends Phaser.Scene {
     e.slowTimer = Math.max(e.slowTimer, duration);
   }
 
-  /** A landed fists punch briefly slows an enemy and shoves it back a hair. */
+  /**
+   * A landed fists punch staggers an enemy: a brief slow, a visible shove back,
+   * a white flash, and a small impact spark. The knockback is wall-clamped so a
+   * cornered enemy is never pushed through geometry.
+   */
   fistImpact(target, attacker) {
     if (!target || !target.active || target.faction !== 'enemy') return;
     this.applySlow(target, FISTS.slowMult, FISTS.slowDuration);
     const a = angleBetween(attacker.x, attacker.y, target.x, target.y);
-    target.x += Math.cos(a) * FISTS.knockback;
-    target.y += Math.sin(a) * FISTS.knockback;
+    const nx = target.x + Math.cos(a) * FISTS.knockback;
+    const ny = target.y + Math.sin(a) * FISTS.knockback;
+    // Only move if the destination (a little past the body edge) is clear floor.
+    const tx = Math.floor((nx + Math.cos(a) * ENEMY.radius) / TILE);
+    const ty = Math.floor((ny + Math.sin(a) * ENEMY.radius) / TILE);
+    if (this.level.grid[ty]?.[tx] !== WALL) {
+      target.x = nx;
+      target.y = ny;
+    }
+    this.flashHit(target);
+    this.hitSpark(target.x, target.y, a);
+  }
+
+  /**
+   * A quick burst of tiny sparks flying off an impact point, fading as they go.
+   * Pure display objects (no physics) so nothing zeroes their motion; each one
+   * tweens outward then destroys itself.
+   */
+  hitSpark(x, y, angle) {
+    for (let i = 0; i < 5; i++) {
+      const spread = angle + (Math.random() - 0.5) * 1.8;
+      const dist = 8 + Math.random() * 10;
+      const s = this.add.circle(x, y, 1.5 + Math.random(), 0xffffff).setDepth(5);
+      this.tweens.add({
+        targets: s,
+        x: x + Math.cos(spread) * dist,
+        y: y + Math.sin(spread) * dist,
+        alpha: 0,
+        scale: 0.2,
+        duration: 160 + Math.random() * 80,
+        ease: 'Quad.easeOut',
+        onComplete: () => s.destroy(),
+      });
+    }
   }
 
   /** Brief white flash on a hit target, then restore its colour. */
