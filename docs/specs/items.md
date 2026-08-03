@@ -29,7 +29,7 @@ Current items:
 | Item | Kind | Icon | Effect |
 |---|---|---|---|
 | **Health Potion** | reservoir | green diamond | Pours its stored HP into the dot (up to full). **Never used up** — it refills from red pixels (see below). Capacity & refill in `config.POTION`. |
-| **Bomb** | cooldown | black bomb + fuse | **Drops a timed bomb** where you stand; it pulses for **`BOMB.fuse` (2 s)** then **explodes** (AoE **`BOMB.damage`** within **`BOMB.radius`**, blast ring + boom). **Only one live at a time**; **`BOMB.cooldown` (5 s)** cooldown. Not consumed. |
+| **Bomb** | cooldown | black bomb + fuse | **Drops a timed bomb** where you stand; it pulses for **`BOMB.fuse` (2 s)** then **explodes** (AoE **`BOMB.damage`** within **`BOMB.radius`**, blast ring + boom). **`BOMB.cooldown` (3 s)** cooldown; **you can have several live at once**. **Rollable** — run into a dropped bomb to shove it like a bowling ball: it's a physics body with drag (`BOMB.drag`), a wall/bomb **bounce** (`BOMB.bounce`), and a speed cap (`BOMB.maxSpeed`); the harder you run in, the faster it rolls (`BOMB.push × your closing speed`), then it coasts to a stop. Not consumed. |
 | **Scroll of Frozen Orb** | mana | blue parchment scroll | Cast (howling-ice-storm sound) for an AoE **`FROST.damage`** within **`FROST.radius`**, plus a **chill** — hit enemies move at **`FROST.slowMultiplier` (50%)** for **`FROST.slowDuration` (2 s)** and tint frosty. Costs **mana** (`MANA.frostCost`) **+ a 2 s cooldown** (`FROST.cooldown`); does nothing if you can't afford it. |
 | **Bow** | weapon | cyan bow | Equips as the dot's weapon; fires arrows (see below). Found in a chest. |
 | **Shield** | shield | light-blue shield | Grants a blocking off-hand (see below). Found in a chest. |
@@ -56,8 +56,10 @@ they **carry across descents** and show on the dot.
   **string/hand draw & release** on each shot ("fffft" on loose, the usual
   impact sound on hit). Only auto-targets enemies that are **on-screen and out
   of the fog** (`BOW.` — max range = **line of sight**, `GAME.visionTiles`), and
-  a **crosshair reticle** marks the target. Foes closer than `BOW.minRange` are
-  **punched with fists** instead.
+  a **crosshair reticle** marks the target. Foes closer than `BOW.minRange`
+  (90 px) are **punched with fists** instead — and while a foe is inside that
+  range, a **translucent red dead-zone ring** is drawn around the dot to show the
+  gap you need to keep for the bow to fire.
 - **Shield** (`shield`) — **fully blocks one incoming hit**, then recharges over
   `SHIELD.blockCooldown` (3 s) before it can block again. A block plays a
   **"plomp"**, the on-dot shield arc **dims while recharging**, and a **blue
@@ -90,8 +92,8 @@ Pixels scatter near the corpse, bob, and **magnet toward the dot** within
 ## Mana ✅
 
 - A player resource (`config.MANA.max`) spent by `mana`-kind items. Carries
-  across descents. A **blue mana bar** appears under the XP bar **only while you
-  hold a mana item**, and refills from blue pixels.
+  across descents. A **blue mana bar** appears **under the avatar's HP bar**
+  (top-left) **only while you hold a mana item**, and refills from blue pixels.
 
 ## Sources of items ✅
 

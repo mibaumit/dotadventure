@@ -15,13 +15,27 @@
 
 ## Start & exit ✅
 
-- **Start point** = center of room 0. The player spawns here, and enemies are
-  **excluded within `aggroRange + 80` (≈420 px)** of it, so the spawn is always
-  safe.
+- **Start point** = center of room 0. The player spawns here (unless arriving by
+  the up-stairs — see below).
 - **Exit** = the room whose center is **farthest** from the start. A **▼
-  down-staircase** is drawn there.
-- Walking onto the staircase **descends** to `depth + 1` (see run rules in
-  [gameplay.md](gameplay.md)). Enemy count and level scale with depth.
+  down-staircase** is drawn there; on levels below the first an **▲
+  up-staircase** is drawn at the start.
+- **Both staircases are safe zones:** enemies are **excluded within
+  `aggroRange + 80` (≈420 px)** of *either* the start **and** the exit, so you
+  never arrive into an ambush from either direction.
+
+## Descend & ascend ✅
+
+- Walking onto the **▼ down-staircase** **descends** to `depth + 1`, spawning you
+  at the new level's up-stairs. Enemy count and level scale with depth.
+- On levels below the first, walking onto the **▲ up-staircase** **ascends** to
+  `depth − 1`, spawning you at that level's **down-stairs**.
+- **Armed trigger:** a staircase only fires once you've clearly stepped **off**
+  it (hysteresis: arms past ~`TILE × 1.5`, triggers within ~`TILE × 0.55`), so
+  arriving *on* a staircase never instantly bounces you back.
+- **Re-entering a level regenerates it** (deterministic per depth+seed), so
+  **enemies respawn** — but a **chest already opened stays looted** (the run
+  tracks opened-chest depths). Levels are otherwise **not persistent**.
 
 ## Fog of war ✅
 

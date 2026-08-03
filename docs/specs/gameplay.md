@@ -13,6 +13,7 @@
 | **Esc** | Pause menu (Continue / Restart + volume sliders) |
 | **Enter** | Confirm Restart on the death screen |
 | Walk onto the **▼ staircase** | Descend to the next level |
+| Walk onto the **▲ staircase** | Climb back to the previous level (levels below the first) |
 | Walk onto a **chest** | Open it (loot pops out) |
 
 ## Movement ✅
@@ -38,8 +39,16 @@
 - Default weapon is **Fists** (`weapons.js`): range 40, cooldown 420 ms,
   **1 damage**. Attacks read on screen as a **side-fist punch** thrust toward
   the target; while boxing, both fists hold toward the enemy.
+- **Fist stagger:** a landed fist punch **staggers** the enemy — a brief slow
+  (`FISTS.slowMult` for `FISTS.slowDuration`) plus a small **knockback**
+  (`FISTS.knockback`, wall-clamped so a cornered enemy is never shoved through
+  geometry), with a **white hit-flash and a spark burst** on impact.
+- **Attack pace:** every dot's attack cooldown (yours **and** enemies') is scaled
+  by **`ATTACK_COOLDOWN_MULT` (1.25 → ~20% slower)** for a calmer, more readable
+  combat tempo.
 - **Damage numbers:** hitting an enemy shows `N` in the player's colour; taking
-  damage shows `-N` in red. Both float up and fade.
+  damage shows `-N` in red. On a kill, an amber **`+N XP`** also floats up. All
+  float and fade.
 - Weapons carry `special()` behaviors (cleaves, power-shots) in the registry,
   but no key is currently bound to them (Space is time-freeze). 🟡
 
@@ -50,7 +59,9 @@
 - **Level-up** at `level × 10` XP (10, 20, 30, …). On level-up: **max HP +2**, a
   **partial refill** of **`LEVELUP.replenishFraction` (20%)** of max HP **and**
   mana (HP heals *only* here), and a **chime**. XP overflow carries.
-- Shown top-right: `Level N` + an amber XP bar.
+- Shown as a **`Level N` label above the XP bar** (a full-width tube above the
+  action bar); the top-right shows only `Stage N`. See
+  [presentation.md](presentation.md).
 
 ## Run rules ✅
 
@@ -60,7 +71,11 @@
 - **Descending** carries progression to the next level: level, XP, max HP, **HP
   and mana as-is** (`GAME.healOnDescend` is off — leaving a level does **not**
   refill; only a level-up heals), weapon, shield, the action-bar contents, the
-  found-items set, and the run timer.
+  found-items set, the **set of already-looted chests**, and the run timer.
+- **Ascending** (the ▲ up-stairs) carries the same state the other way and drops
+  you at that level's **down-stairs**. The level regenerates: **enemies respawn**,
+  but a **chest you already opened stays gone** (tracked across the run). See
+  [world.md](world.md).
 
 ## Time-freeze ✅ (Space)
 

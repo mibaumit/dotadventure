@@ -119,6 +119,20 @@ the spec as part of "done": a feature isn't finished until its spec reflects it.
 The specs describe *behavior*; `config.js` remains the single source of truth
 for exact values (specs reference them, don't duplicate the authority).
 
+**Documenting a feature is mandatory, not optional.** Every shipped change must
+leave the docs describing the game as it now plays:
+
+- Pick the right file — `gameplay.md` (controls/combat/progression/run rules),
+  `world.md` (levels/fog/stairs), `entities.md` (dot/enemies), `items.md`
+  (bar/items/equipment), `presentation.md` (HUD/audio/visuals) — and update
+  every file the change touches (a HUD tweak to a combat feature usually hits
+  two).
+- Remove or reword anything the change made false; don't just append.
+- Move the entry out of `planned.md` when it ships; add newly-requested-but-
+  unbuilt ideas into `planned.md`.
+- If you finish code but run low on context, update the specs **before** wrapping
+  up — an undocumented feature is unfinished work, and reviewers read the spec.
+
 ## Coding conventions (keep it clean)
 
 1. **No magic numbers.** Every tunable lives in `config.js`. Reference it, don't inline.
@@ -159,7 +173,9 @@ Implemented now:
   order-clicks); a play/pause indicator + game timer sit in the bottom-right
 - **Esc** — pause menu (Continue game / Restart game)
 - Combat is automatic: the dot punches enemies it **faces** and that are in range
-- Reach the **▼ staircase** to descend to the next (deeper, harder) level
+  (a landed fist **staggers** the enemy — brief slow + knockback)
+- Reach the **▼ staircase** to descend; on levels below the first, the **▲
+  staircase** climbs back up (enemies respawn; already-looted chests do not)
 - On death: **Enter** (or click the button) to restart the run
 
 Planned (see roadmap): **Tab/1–9** switch dot, order keys for the squad,

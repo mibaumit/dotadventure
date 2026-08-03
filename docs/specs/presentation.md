@@ -3,29 +3,36 @@
 The HUD is kept **minimal and mobile-friendly** — no debug/status text on the
 play screen (it lives on the pause menu instead, see below).
 
-- **Top-left:** a **☰ menu button** (tap/click opens the pause menu).
-- **Top-right:** `Stage N` (the dungeon depth, cyan) above the character
-  `Level N` + amber **XP bar**, with a blue **mana bar** below it (only visible
-  while you hold a mana item — see [items.md](items.md)). *Stage* = how deep you
-  are; *Level* = character progression/XP.
+- **Top-left:** a **☰ menu button**, and just below it a **player avatar frame**
+  (a WoW-style unit frame): the dot's **portrait**, a **HP bar** under it, and —
+  only while you hold a mana item — a blue **mana bar** under that. This is where
+  the character's **HP** lives (the level lives above the XP bar; see below).
+- **Top-right:** just `Stage N` (the dungeon depth, cyan) = how deep you are.
 - **Bottom-left:** clickable **sound icon** (speaker with waves / red-✕ when
   muted) — cycles master volume full → half → mute; next to it a **♪ music
   button** that cycles the background track (shows `n/total`).
 - **Bottom-center:** the **5-slot action bar** (`HOTBAR.slots`), sized to fit the
-  screen width (down to a phone).
+  screen width (down to a phone). Directly **above it sits the XP bar** — a
+  **WoW-style tube** spanning the bar's exact width, always visible even at 0 XP
+  (a dark track with an amber outline; the amber fill grows inside it), with the
+  `x / y XP` value **centered in the tube** and a **`Level N`** label just above.
+  *Stage* = how deep you are; *Level* = character progression/XP.
 - **Bottom-right:** tappable **▶/⏸ time-freeze button** + **mm:ss game timer**.
   (The sound + freeze buttons sit just above the bar so they never overlap it on
   narrow screens.)
 - **On stage start:** a big **"Stage N" headline** fades out over the play field.
-- **World-space:** per-entity health bars, the **level number drawn on each
-  character's body** (toward the back, behind the face), faces, floating
-  damage/heal numbers, click markers (blue = move, red = attack), little
-  **resource pixels** (red = HP, blue = mana) dropped by kills, **arrow
-  projectiles**, a two-handed **bow** (animated string) / **shield arc** on the
-  dot, a **crosshair reticle** on the bow's target, small recharge bars under the
-  dot (white **bow reload**, blue **shield**), a thin **blue ring** around
-  chilled (Frozen-Orb-slowed) enemies, and **dropped bombs with a burning fuse**
-  (a flickering flame that descends the fuse as it counts down).
+- **World-space:** per-entity health bars (the player's floats above the dot too,
+  mirrored on the avatar), the **level number drawn on each *enemy's* body** (the
+  **player's is not** — it's on the HUD), faces, floating damage/heal numbers
+  **plus an amber `+N XP` on each kill**, click markers (blue = move, red =
+  attack), little **resource pixels** (red = HP, blue = mana) dropped by kills,
+  **arrow projectiles**, a two-handed **bow** (animated string) / **shield arc**
+  on the dot, a **crosshair reticle** on the bow's target, a **translucent red
+  bow dead-zone ring** when a foe is inside `BOW.minRange`, small recharge bars
+  under the dot (white **bow reload**, blue **shield**), a **spark burst** on a
+  landed fist, a thin **blue ring** around chilled (Frozen-Orb-slowed) enemies,
+  and **rollable dropped bombs with a burning fuse** (a flickering flame that
+  descends the fuse as it counts down).
 
 ## Controls & mobile ✅
 
@@ -45,10 +52,12 @@ play screen (it lives on the pause menu instead, see below).
 
 - Also shows the **run status + controls** (Depth / HP / Weapon / Enemies and
   the control hints) that used to sit on the play HUD.
+- **Opening the pause menu stops the background music and plays a soft pause
+  "blip"**; leaving it (Continue / Restart / Main menu) **resumes the music**.
 - Dims the game (which is paused underneath) and shows a panel with:
   - **Music** volume slider (draggable) — default **50%**
   - **Sound** volume slider (draggable) — default **100%**
-  - **Continue game** / **Restart game** buttons
+  - **Continue game** / **Restart game** / **Main menu** buttons
   - "Esc to resume"
 
 ## Audio ✅ (`sound.js`, Web Audio API — fully procedural, no files)
@@ -56,12 +65,16 @@ play screen (it lives on the pause menu instead, see below).
 - Starts on the first user gesture (browser autoplay policy). Routed through a
   **master** bus → **music** bus + **sfx** bus (the two pause-menu sliders); the
   bottom-left icon controls master.
-- **Music:** two selectable **background tracks** (cycle with the ♪ button —
-  see HUD), each fully synthesized:
+- **Music:** three selectable **background tracks** (cycle with the ♪ button —
+  see HUD), each fully synthesized. Music **stops while the game is paused** and
+  resumes on unpause.
   - *Dungeon score* — dark **drone pad** + a **distorted string** minor-key
     melody through a shared echo (Diablo-ish).
   - *Deep pulse* — a plucked minor **arpeggio** over a slow two-beat **bass
     pulse**, brighter and more rhythmic.
+  - *Crystal caverns* — an evolving four-chord **pad** (Am · F · Dm · E) with a
+    soft **tolling bell** on each chord change and a sparse high pentatonic
+    melody; brighter and more harmonically moving.
 - **SFX:**
   - **Footsteps** — soft low thud on a ~300 ms cadence while moving.
   - **Punch** — noise smack + low thump, on the player's own hits.
@@ -72,6 +85,7 @@ play screen (it lives on the pause menu instead, see below).
   - **Level-up chime** — a bright ascending arpeggio on a character level-up.
   - **Explosion boom** — deep sub + noise blast when a dropped bomb detonates.
   - **Frost cast howl** — a howling ice-storm when the Frozen Orb is cast.
+  - **Pause blip** — a soft descending two-tone when the game is paused.
 
 ## Visual details ✅
 
