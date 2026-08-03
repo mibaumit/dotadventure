@@ -26,10 +26,13 @@ import {
   playLevelUp,
   playExplosion,
   cycleVolume,
-  getVolume,
   cycleMusic,
-  getMusicTrack,
 } from '../sound.js';
+import {
+  drawSoundIcon as renderSoundIcon,
+  drawMusicIcon as renderMusicIcon,
+  pointInRect,
+} from '../hudIcons.js';
 
 export class GameScene extends Phaser.Scene {
   constructor() {
@@ -717,10 +720,10 @@ export class GameScene extends Phaser.Scene {
     this.input.on('pointerdown', (pointer) => {
       if (this.modalOpen) return; // dialog swallows the tap (it dismisses)
       // On-screen buttons consume the tap (menu / freeze / sound / music / bar).
-      if (this.overSoundIcon(pointer.x, pointer.y)) return void cycleVolume();
-      if (this.inRect(pointer, this.musicRect)) return void cycleMusic();
-      if (this.inRect(pointer, this.menuRect)) return void this.openPause();
-      if (this.inRect(pointer, this.freezeRect)) return void this.toggleFreeze();
+      if (pointInRect(pointer, this.soundRect)) return void cycleVolume();
+      if (pointInRect(pointer, this.musicRect)) return void cycleMusic();
+      if (pointInRect(pointer, this.menuRect)) return void this.openPause();
+      if (pointInRect(pointer, this.freezeRect)) return void this.toggleFreeze();
       const slot = this.hotbarSlotAt(pointer.x, pointer.y);
       if (slot >= 0 && this.hotbar[slot]) return void this.useHotbarSlot(slot);
 
@@ -757,13 +760,6 @@ export class GameScene extends Phaser.Scene {
     if (this.player.dead || this.modalOpen || this.scene.isPaused()) return;
     this.scene.pause();
     this.scene.launch('PauseScene');
-  }
-
-  /** Point-in-rect test for a screen-space UI hit area `{x,y,w,h}`. */
-  inRect(pointer, r) {
-    return (
-      r && pointer.x >= r.x && pointer.x <= r.x + r.w && pointer.y >= r.y && pointer.y <= r.y + r.h
-    );
   }
 
   /** Index of the action-bar slot under a screen point, or -1. */
@@ -1271,67 +1267,22 @@ export class GameScene extends Phaser.Scene {
     this.drawHotbar();
   }
 
-  /** Draw the bottom-left music-cycle button (♪) + the current track number. */
+  /**
+   * Draw the bottom-left music-cycle button — a bordered pill reading
+   * "♪ Music N / M", styled to match the start-screen menu button. Sits just to
+   * the right of the speaker icon, above the action bar.
+   */
   drawMusicIcon() {
-    const g = this.musicIcon;
-    g.clear();
-    const x = 64;
-    const y = this.bottomStripTop() - 20;
-    this.musicRect = { x: x - 6, y: y - 14, w: 42, h: 32 };
-
-    const col = 0xcfe6ff;
-    g.fillStyle(col, 0.9); // two beamed eighth-notes = "music"
-    g.fillEllipse(x + 1, y + 8, 7, 5);
-    g.fillEllipse(x + 13, y + 5, 7, 5);
-    g.fillRect(x + 4, y - 8, 2, 16);
-    g.fillRect(x + 16, y - 11, 2, 16);
-    g.fillRect(x + 4, y - 11, 14, 3); // beam
-
-    const { index, count } = getMusicTrack();
-    this.musicLabel.setPosition(x + 26, y + 1).setText(`${index + 1}/${count}`);
-  }
-
-  /** Is the given screen point over the bottom-left sound icon? */
-  overSoundIcon(sx, sy) {
-    const r = this.soundRect;
-    return sx >= r.x && sx <= r.x + r.w && sy >= r.y && sy <= r.y + r.h;
+    const x = 18; // speaker's left edge; the pill sits 40px to its right
+    const y = this.bottomStripTop() - 20; // same baseline as the speaker icon
+    this.musicRect = renderMusicIcon(this.musicIcon, this.musicLabel, x, y);
   }
 
   /** Draw the bottom-left speaker icon reflecting the current volume state. */
   drawSoundIcon() {
-    const g = this.soundIcon;
-    g.clear();
-
     const x = 18;
     const y = this.bottomStripTop() - 20; // sit above the action bar (mobile-safe)
-    this.soundRect = { x: x - 6, y: y - 12, w: 44, h: 30 }; // clickable hit area
-
-    const col = 0xcfe6ff;
-    // Speaker body (small box) + cone (triangle).
-    g.fillStyle(col, 0.9);
-    g.fillRect(x, y - 4, 6, 12);
-    g.fillTriangle(x + 6, y - 8, x + 6, y + 12, x + 16, y + 2);
-
-    const st = getVolume();
-    if (st.muted) {
-      // Red X to the right of the speaker.
-      g.lineStyle(2, 0xff6b6b, 0.95);
-      g.beginPath();
-      g.moveTo(x + 21, y - 5);
-      g.lineTo(x + 31, y + 9);
-      g.moveTo(x + 31, y - 5);
-      g.lineTo(x + 21, y + 9);
-      g.strokePath();
-    } else {
-      // One or two "sound waves" depending on level.
-      const waves = st.volume > 0.4 ? 2 : 1;
-      g.lineStyle(2, col, 0.9);
-      for (let i = 0; i < waves; i++) {
-        g.beginPath();
-        g.arc(x + 16, y + 2, 6 + i * 5, -Math.PI / 4, Math.PI / 4);
-        g.strokePath();
-      }
-    }
+    this.soundRect = renderSoundIcon(this.soundIcon, x, y);
   }
 
   /**
@@ -2205,6 +2156,8 @@ export class GameScene extends Phaser.Scene {
     p.mana = Math.min(p.maxMana, p.mana + p.maxMana * LEVELUP.replenishFraction);
     playLevelUp();
     this.showSwingPulse(p); // quick visual pop
+    // Floating "Level up!" over the dot — same style as the shield-block text.
+    this.showDamageNumber(p.x, p.y, 'Level up!', '#ffcf5c');
   }
 
   /** Damage the player (respecting weapon defense); trigger death at 0 HP. */

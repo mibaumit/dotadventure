@@ -75,7 +75,35 @@ export function cycleVolume() {
 export function ensureStarted() {
   init();
   if (ctx.state === 'suspended') ctx.resume();
+  suspendedByBlur = false; // an explicit user start clears any blur-pause
   startMusic();
+}
+
+// --- Auto-pause when the tab/window loses focus, resume when it returns ------
+// Suspending the AudioContext freezes the whole graph (music + any tails), so
+// the game goes silent in the background instead of playing on unheard. We only
+// auto-resume what WE paused (suspendedByBlur), so a user mute isn't undone.
+let suspendedByBlur = false;
+function suspendForBlur() {
+  if (ctx && ctx.state === 'running') {
+    ctx.suspend();
+    suspendedByBlur = true;
+  }
+}
+function resumeFromBlur() {
+  if (ctx && suspendedByBlur) {
+    ctx.resume();
+    suspendedByBlur = false;
+  }
+}
+if (typeof window !== 'undefined') {
+  window.addEventListener('blur', suspendForBlur);
+  window.addEventListener('focus', resumeFromBlur);
+  window.addEventListener('pagehide', suspendForBlur);
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) suspendForBlur();
+    else resumeFromBlur();
+  });
 }
 
 /** A short reusable white-noise buffer (for punches/footsteps). */
@@ -319,7 +347,7 @@ export function playAggro() {
 }
 
 // Selectable background music tracks (each builder returns a { stop() } handle).
-const MUSIC_TRACKS = [startDungeonScore, startPulseScore];
+const MUSIC_TRACKS = [startDungeonScore, startPulseScore, startCrystalScore];
 
 /** Start the current music track (idempotent — no-op if one is already playing). */
 function startMusic() {
@@ -394,12 +422,24 @@ function startDungeonScore() {
   oscs.forEach((o) => o.start());
 
   // --- Distorted string melody (A-minor), self-looping ---
+  // A longer four-phrase theme (A · A' · B · B') so the loop takes ~25s instead
+  // of ~11s — the extra melodic movement keeps it from feeling repetitive.
   const beat = 520; // ms per beat (slow, mournful)
   const MELODY = [
+    // Phrase A — the mournful main statement
     [220.0, 2], [261.63, 1], [293.66, 1],
     [329.63, 2], [293.66, 1], [261.63, 1],
-    [220.0, 3], [null, 1],
-    [246.94, 2], [220.0, 1], [196.0, 1],
+    [246.94, 3], [null, 1],
+    // Phrase A' — answer that dips low then eases back up
+    [196.0, 2], [220.0, 1], [246.94, 1],
+    [261.63, 2], [220.0, 2], [null, 2],
+    // Phrase B — a lift into the upper register for contrast
+    [329.63, 2], [349.23, 1], [392.0, 1],
+    [440.0, 3], [392.0, 1],
+    [349.23, 2], [329.63, 2], [null, 1],
+    // Phrase B' — descent that resolves back home to A
+    [392.0, 1], [349.23, 1], [329.63, 1], [293.66, 1],
+    [261.63, 2], [246.94, 2],
     [220.0, 4], [null, 2],
   ];
   let step = 0;
@@ -464,6 +504,7 @@ function startPulseScore() {
 
 /** A plucked note (sharp attack → decay) through a closing low-pass; dry + echo. */
 function playPluck(freq, dur, type, cutoff, level, out, delay) {
+  if (!ctx || ctx.state !== 'running') return; // don't queue notes while paused
   const t = ctx.currentTime;
   const osc = ctx.createOscillator();
   osc.type = type;
@@ -481,6 +522,126 @@ function playPluck(freq, dur, type, cutoff, level, out, delay) {
   lp.connect(delay); // echo send
   osc.start(t);
   osc.stop(t + dur + 0.05);
+}
+
+/**
+ * Track 2 — "crystal caverns": an evolving four-chord pad (Am · F · Dm · E) with
+ * a soft tolling bell on each chord change and a sparse high pentatonic melody.
+ * Brighter and more harmonically-moving than the two darker scores.
+ */
+function startCrystalScore() {
+  const out = ctx.createGain();
+  out.gain.value = 0.0001;
+  out.gain.linearRampToValueAtTime(0.42, ctx.currentTime + 3.5); // fade in
+  out.connect(musicBus);
+
+  // Shared echo.
+  const delay = ctx.createDelay(1.0);
+  delay.delayTime.value = 0.33;
+  const feedback = ctx.createGain();
+  feedback.gain.value = 0.3;
+  delay.connect(feedback).connect(delay);
+  delay.connect(out);
+
+  // --- Evolving pad: three detuned voices whose pitches follow a progression ---
+  const padGain = ctx.createGain();
+  padGain.gain.value = 0.26;
+  padGain.connect(out);
+  const padFilter = ctx.createBiquadFilter();
+  padFilter.type = 'lowpass';
+  padFilter.frequency.value = 700;
+  padFilter.connect(padGain);
+  padFilter.connect(delay);
+
+  const CHORDS = [
+    [110.0, 130.81, 164.81], // Am (A2 C3 E3)
+    [87.31, 110.0, 130.81], // F  (F2 A2 C3)
+    [73.42, 87.31, 110.0], // Dm (D2 F2 A2)
+    [82.41, 103.83, 123.47], // E  (E2 G#2 B2)
+  ];
+  const padOscs = CHORDS[0].map((f, i) => {
+    const o = ctx.createOscillator();
+    o.type = 'sawtooth';
+    o.frequency.value = f;
+    o.detune.value = (i - 1) * 6; // slight spread for width
+    o.connect(padFilter);
+    o.start();
+    return o;
+  });
+
+  // Slow filter shimmer over the pad.
+  const lfo = ctx.createOscillator();
+  lfo.frequency.value = 0.07;
+  const lfoGain = ctx.createGain();
+  lfoGain.gain.value = 260;
+  lfo.connect(lfoGain).connect(padFilter.frequency);
+  lfo.start();
+
+  const beat = 500; // ms
+  const barBeats = 4; // one chord per bar
+  let chordStep = 0;
+  let chordTimer = null;
+  const changeChord = () => {
+    const chord = CHORDS[chordStep % CHORDS.length];
+    const t = ctx.currentTime;
+    padOscs.forEach((o, i) => o.frequency.linearRampToValueAtTime(chord[i], t + 0.6));
+    playBell(chord[0] * 4, 1.6, out, delay); // toll two octaves above the root
+    chordStep++;
+    chordTimer = setTimeout(changeChord, beat * barBeats);
+  };
+
+  // Sparse A-minor pentatonic melody (A C D E G across two octaves).
+  const MEL = [
+    [659.25, 1], [587.33, 1], [523.25, 2],
+    [440.0, 1], [523.25, 1], [587.33, 2],
+    [null, 1], [783.99, 1], [659.25, 2],
+    [587.33, 1], [523.25, 1], [440.0, 2],
+    [392.0, 2], [440.0, 2], [null, 4],
+  ];
+  let mStep = 0;
+  let mTimer = null;
+  const melTick = () => {
+    const [f, b] = MEL[mStep % MEL.length];
+    if (f) playPluck(f, ((b * beat) / 1000) * 0.9, 'triangle', 3000, 0.12, out, delay);
+    mStep++;
+    mTimer = setTimeout(melTick, b * beat);
+  };
+
+  chordTimer = setTimeout(changeChord, 200);
+  mTimer = setTimeout(melTick, beat * barBeats + 200); // let the pad establish first
+
+  return {
+    stop: () => {
+      clearTimeout(chordTimer);
+      clearTimeout(mTimer);
+      stopTrack(out, [...padOscs, lfo], null);
+    },
+  };
+}
+
+/** A soft struck bell: a few inharmonic sine partials with a long decay. */
+function playBell(freq, dur, out, delay) {
+  if (!ctx || ctx.state !== 'running') return; // don't queue notes while paused
+  const t = ctx.currentTime;
+  const partials = [
+    [1.0, 0.5],
+    [2.01, 0.22],
+    [3.01, 0.09],
+  ];
+  for (const [mult, lvl] of partials) {
+    const o = ctx.createOscillator();
+    o.type = 'sine';
+    o.frequency.value = freq * mult;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(lvl, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g);
+    g.connect(out); // dry
+    g.connect(delay); // echo send
+    o.start(t);
+    o.stop(t + dur + 0.05);
+  }
 }
 
 /** Fade a track's output out over 0.4 s (leaves any short tails to ring off). */
@@ -507,6 +668,7 @@ function stopTrack(out, oscs, timer) {
 
 /** A bowed, distorted string note: two detuned saws + vibrato → waveshaper. */
 function playStringNote(freq, dur, out, delay) {
+  if (!ctx || ctx.state !== 'running') return; // don't queue notes while paused
   const t = ctx.currentTime;
   const s1 = ctx.createOscillator();
   s1.type = 'sawtooth';
