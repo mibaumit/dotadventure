@@ -5,10 +5,9 @@
 | Input | Action |
 |---|---|
 | **WASD** | Move the dot directly (normalized; diagonals aren't faster) |
-| **Left-click ground** | Walk there (click-to-move) |
-| **Left-click enemy** | Chase that enemy and auto-attack it |
+| **Left-click** | **Attack toward the cursor** (free aim; one shot per weapon cooldown) |
 | **Left-click sound icon** (bottom-left) | Cycle volume: full → half → mute |
-| **Space** | Toggle **time-freeze** (tactical pause; clicks still issue orders) |
+| **Space** | Toggle **time-freeze** (tactical pause; attacking is disabled while frozen) |
 | **1–9** | Use the item in that action-bar slot |
 | **Esc** | Pause menu (Continue / Restart + volume sliders) |
 | **Enter** | Confirm Restart on the death screen |
@@ -18,27 +17,22 @@
 
 ## Movement ✅
 
-- **WASD** sets velocity directly; the Arcade collider slides the dot along
-  walls (only the into-wall component is lost).
-- **Click-to-move** steers toward the target each frame (`UNIT.speed = 178`
-  px/s), easing down within `UNIT.arriveRadius = 30` and stopping within
-  `UNIT.stopRadius = 6`.
-- **Wall behaviour:** a glancing wall hit merely *slows* the dot (by the hit
-  angle); a **90° head-on stops it**. With no pathfinding yet, a click-move is
-  cancelled only after ~**1.2 s of no progress** toward the target.
-- **Attack-move to an enemy:** clicking an enemy chases it and stops once it's
-  in weapon range.
+- **WASD-only:** movement sets velocity directly (`UNIT.speed = 178` px/s); the
+  Arcade collider slides the dot along walls (only the into-wall component is
+  lost). A glancing wall hit merely *slows* the dot; a **90° head-on stops it**.
+- **Clicks never move** — a click always attacks (see Combat). There is no
+  click-to-move / attack-move.
 
-## Combat ✅ (hybrid, mostly automatic)
+## Combat ✅ (click to attack, free aim)
 
-- The dot **auto-attacks** the nearest enemy that is both within weapon range
-  **and** inside its front-facing arc (`UNIT.attackArc ≈ ±75°`). Turn away and
-  it stops swinging.
-- A **clicked (focus) enemy** takes priority — the dot faces and attacks it
-  regardless of the arc, once in range.
+- **Every attack is a click.** There is **no auto-attack** — the dot only swings
+  or shoots when you left-click, aiming **toward the cursor** (free aim). One
+  shot per click, gated by the weapon's cooldown (holding does nothing extra).
+- **Melee** sweeps a cone (`±UNIT.attackArc ≈ 75°`) toward the aim, hitting every
+  enemy in it; **ranged** fires a projectile straight at the cursor.
 - Default weapon is **Fists** (`weapons.js`): range 40, cooldown 420 ms,
   **1 damage**. Attacks read on screen as a **side-fist punch** thrust toward
-  the target; while boxing, both fists hold toward the enemy.
+  the aim; a red marker briefly flags the click point.
 - **Fist stagger:** a landed fist punch **staggers** the enemy — a brief slow
   (`FISTS.slowMult` for `FISTS.slowDuration`) plus a small **knockback**
   (`FISTS.knockback`, wall-clamped so a cornered enemy is never shoved through

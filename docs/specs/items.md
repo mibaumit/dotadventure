@@ -54,12 +54,9 @@ they **carry across descents** and show on the dot.
   arrows**, **damage = fists (1)**, and a **2 s cooldown** shown as a white
   loading bar under the dot. Held in **both hands** with an animated
   **string/hand draw & release** on each shot ("fffft" on loose, the usual
-  impact sound on hit). Only auto-targets enemies that are **on-screen and out
-  of the fog** (`BOW.` — max range = **line of sight**, `GAME.visionTiles`), and
-  a **crosshair reticle** marks the target. Foes closer than `BOW.minRange`
-  (90 px) are **punched with fists** instead — and while a foe is inside that
-  range, a **translucent red dead-zone ring** is drawn around the dot to show the
-  gap you need to keep for the bow to fire.
+  impact sound on hit). **Click to fire an arrow toward the cursor** (free aim);
+  the arrow flies until it hits a wall/enemy or its lifespan ends (reach ≈ line
+  of sight). No auto-targeting — every shot is a click.
 - **Shield** (`shield`) — **fully blocks one incoming hit**, then recharges over
   `SHIELD.blockCooldown` (3 s) before it can block again. A block plays a
   **"plomp"**, the on-dot shield arc **dims while recharging**, and a **blue
