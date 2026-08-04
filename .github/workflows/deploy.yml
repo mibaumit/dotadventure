@@ -1,0 +1,53 @@
+# Builds the game (with cache-busting version stamps) and publishes it to
+# GitHub Pages on every push to main. Each deploy uses a fresh version query
+# on every module import, so browsers never serve a stale cached file.
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # allow manual re-deploys from the Actions tab
+
+# Allow the workflow to publish Pages.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time; let a newer push cancel an in-flight run.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # Version = UTC build time + short commit SHA, so it's both monotonic and
+      # unique per commit. Stamped onto every relative import by the build.
+      - name: Build with cache-buster
+        run: node scripts/build.mjs
+        env:
+          BUILD_VERSION: ${{ github.run_id }}-${{ github.sha }}
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
