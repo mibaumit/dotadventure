@@ -438,11 +438,10 @@ export class GameScene extends Phaser.Scene {
 
     this.physics.add.collider(this.enemies, this.walls);
     this.physics.add.collider(this.player, this.enemies);
-    // NB: no enemies-vs-enemies physics collider. Arcade won't reliably push
-    // apart bodies that are already co-located/stationary, so overlap is instead
-    // guaranteed by the position-based separateEnemies() each frame, while the
-    // boids steering in updateEnemies() keeps a chasing pack from ever piling
-    // into that state (which is what used to make them feel stuck).
+    // No enemies-vs-enemies collision at all: enemies ignore each other and are
+    // free to overlap / pass through. (They still collide with walls and the
+    // player.) This deliberately avoids any separation push, which is what used
+    // to make packs jostle, stick, or deadlock.
   }
 
   /**
@@ -1344,7 +1343,8 @@ export class GameScene extends Phaser.Scene {
     if (!this.frozen) this.updateProjectiles(delta);
     if (!this.frozen) this.updateBombs(delta);
     if (!this.frozen) {
-      this.separateEnemies(); // hard no-overlap guarantee (see method comment)
+      // Enemies ignore each other entirely — no separation/collision, so they
+      // just overlap and pass through instead of pushing or sticking.
       for (const e of this.enemies.getChildren()) {
         if (e.active) this.updateFistsFor(e, time, ENEMY.radius);
       }
@@ -1666,52 +1666,8 @@ export class GameScene extends Phaser.Scene {
       return;
     }
     const speed = e.speed * 0.5; // amble slower than a chase
-    let dirX = dx / d;
-    let dirY = dy / d;
-    // Sidestep any patrol-mate in the way. This is PERPENDICULAR steering (go
-    // around), not repulsion (back off): pushing straight apart deadlocks two
-    // enemies walking toward each other — separateEnemies() shoves them back as
-    // fast as they step forward, so they freeze face-to-face. A perpendicular
-    // nudge preserves forward speed and lets them flow past instead.
-    const av = this.patrolAvoid(e, dirX, dirY);
-    dirX += av.x;
-    dirY += av.y;
-    const len = Math.hypot(dirX, dirY) || 1;
-    dirX /= len;
-    dirY /= len;
-    e.facing = Math.atan2(dirY, dirX); // look where you're actually heading
-    e.setVelocity(dirX * speed, dirY * speed);
-  }
-
-  /**
-   * Sidestep steering for a patrolling enemy: for each other enemy that's close
-   * and roughly AHEAD of `e`'s heading (dirX,dirY), return a vector perpendicular
-   * to the heading, pointing to whichever side clears the blocker. Perpendicular
-   * (not repulsive) so it curves the path around a bump without killing forward
-   * motion — the fix for the head-on patrol deadlock. O(n²) over the handful of
-   * live enemies.
-   */
-  patrolAvoid(e, dirX, dirY) {
-    const R = UNIT.radius * 3; // start easing around within ~3 radii
-    let ax = 0;
-    let ay = 0;
-    for (const o of this.enemies.getChildren()) {
-      if (o === e || !o.active) continue;
-      const ox = o.x - e.x;
-      const oy = o.y - e.y;
-      const dist = Math.hypot(ox, oy);
-      if (dist < 0.01 || dist > R) continue;
-      const ahead = (ox * dirX + oy * dirY) / dist; // 1 = dead ahead, ≤0 = beside/behind
-      if (ahead <= 0.15) continue; // only dodge things in front of us
-      const w = ((R - dist) / R) * ahead; // closer & more head-on → stronger
-      // Which side is the blocker on? cross>0 → to our left, so veer right.
-      const cross = dirX * oy - dirY * ox;
-      const side = cross > 0 ? -1 : 1;
-      ax += -dirY * side * w; // left-perpendicular of the heading, signed to the open side
-      ay += dirX * side * w;
-    }
-    const AVOID = 1.6; // > 1 so a close blocker can dominate and clearly steer around
-    return { x: ax * AVOID, y: ay * AVOID };
+    e.facing = Math.atan2(dy, dx); // look where you're walking
+    e.setVelocity((dx / d) * speed, (dy / d) * speed);
   }
 
   /** Enemy AI: chase the player when seen & in range, punch when adjacent. */
@@ -1764,14 +1720,9 @@ export class GameScene extends Phaser.Scene {
 
       e.facing = angleBetween(e.x, e.y, p.x, p.y); // turn to face the player
       const sp = e.slowTimer > 0 ? e.speed * e.slowMult : e.speed; // slowed?
-      const sep = this.enemySeparation(e); // push away from crowding neighbours
       if (d <= e.weapon.range) {
-        // In reach: swing at the player. Don't hard-stop into a pile — if others
-        // are stacking on the same spot, keep drifting apart (gently) so a mob
-        // spreads AROUND the player instead of overlapping into one blob.
-        const sl = Math.hypot(sep.x, sep.y);
-        if (sl > 0.001) e.setVelocity((sep.x / sl) * sp * 0.6, (sep.y / sl) * sp * 0.6);
-        else e.setVelocity(0, 0);
+        // In reach: hold position and swing (a pile of enemies simply overlaps).
+        e.setVelocity(0, 0);
         e.attackTarget = p; // fists box the player
         if (e.attackTimer <= 0) {
           e.weapon.attack({ scene: this, owner: e, target: p });
@@ -1781,8 +1732,8 @@ export class GameScene extends Phaser.Scene {
         // Head toward the player. With a clear line of sight, beeline straight
         // (smooth across open rooms); otherwise follow the flow field downhill
         // so we route AROUND walls instead of grinding into a corner. Still FACE
-        // the player so fists/aim stay right; blend the separation push so a
-        // converging pack flows around itself instead of jamming onto one tile.
+        // the player so fists/aim stay right. Enemies ignore each other, so a
+        // converging pack just overlaps rather than jostling for space.
         let dx;
         let dy;
         if (this.hasLineOfSight(e.x, e.y, p.x, p.y)) {
@@ -1798,10 +1749,8 @@ export class GameScene extends Phaser.Scene {
             dy = Math.sin(e.facing);
           }
         }
-        let vx = dx + sep.x;
-        let vy = dy + sep.y;
-        const len = Math.hypot(vx, vy) || 1;
-        e.setVelocity((vx / len) * sp, (vy / len) * sp);
+        const len = Math.hypot(dx, dy) || 1;
+        e.setVelocity((dx / len) * sp, (dy / len) * sp);
         e.attackTarget = null; // fists ride on the sides while chasing
       }
     }
@@ -1919,92 +1868,6 @@ export class GameScene extends Phaser.Scene {
     const vy = cyp - e.y;
     const l = Math.hypot(vx, vy) || 1;
     return { x: vx / l, y: vy / l };
-  }
-
-  /**
-   * Boids-style separation for enemy `e`: a steering vector pointing away from
-   * other enemies within a couple of body-widths, weighted by how close each one
-   * is (0 at the edge of range, strongest when touching). Blended into the chase
-   * direction in updateEnemies() so a converging pack spreads and slides past
-   * each other rather than wedging into one spot. O(n²) over enemies — trivial
-   * for the handful alive per level.
-   */
-  enemySeparation(e) {
-    const R = UNIT.radius * 2.4; // start easing apart at ~2.4 radii
-    const STRENGTH = 1.6; // > 1 so a tight cluster can briefly override the chase
-    const kids = this.enemies.getChildren();
-    const myIdx = kids.indexOf(e);
-    let sx = 0;
-    let sy = 0;
-    for (let k = 0; k < kids.length; k++) {
-      const o = kids[k];
-      if (o === e || !o.active) continue;
-      const dx = e.x - o.x;
-      const dy = e.y - o.y;
-      const d = Math.hypot(dx, dy);
-      if (d < 0.01) {
-        // (Near-)exactly stacked: a symmetric push would send both the SAME way
-        // and they'd never part (the lockstep trap). Break it deterministically
-        // by index so the pair escapes along OPPOSITE directions.
-        sx += myIdx < k ? -1 : 1;
-      } else if (d < R) {
-        const w = (R - d) / R; // 0 at edge → 1 at contact
-        sx += (dx / d) * w;
-        sy += (dy / d) * w;
-      }
-    }
-    return { x: sx * STRENGTH, y: sy * STRENGTH };
-  }
-
-  /**
-   * Hard guarantee that no two enemies visually overlap. The boids steering in
-   * updateEnemies() keeps a pack flowing apart, but steering is a soft force —
-   * this resolves any residual overlap directly by position (Arcade's collider
-   * won't reliably separate co-located bodies). Each overlapping pair is pushed
-   * apart to a full body-width, but a push is only applied on an axis if it
-   * doesn't shove the enemy into a wall tile — so nothing ever wedges into
-   * geometry (the old version's failure mode). O(n²), trivial for a few enemies.
-   */
-  separateEnemies() {
-    const minDist = UNIT.radius * 2; // touching, not overlapping
-    const es = this.enemies.getChildren();
-    for (let i = 0; i < es.length; i++) {
-      const a = es[i];
-      // Only push apart enemies that are AGGROED. Idle patrollers get no backward
-      // separation push — that push is what deadlocks a bumping pair (they'd be
-      // shoved back as fast as they walk forward). Their sidestep steering keeps
-      // them from overlapping in the first place; if it can't, they just pass
-      // through instead of freezing.
-      if (!a.active || !a.alerted) continue;
-      for (let j = i + 1; j < es.length; j++) {
-        const b = es[j];
-        if (!b.active || !b.alerted) continue;
-
-        let dx = b.x - a.x;
-        let dy = b.y - a.y;
-        let d = Math.hypot(dx, dy);
-        if (d >= minDist) continue;
-        if (d < 0.01) {
-          // Perfectly stacked: pick a deterministic axis by index so the pair
-          // parts instead of being nudged the same way.
-          dx = i < j ? -1 : 1;
-          dy = 0;
-          d = 1;
-        }
-        const push = (minDist - d) / 2;
-        const nx = (dx / d) * push;
-        const ny = (dy / d) * push;
-        this.nudgeEnemy(a, -nx, -ny);
-        this.nudgeEnemy(b, nx, ny);
-      }
-    }
-  }
-
-  /** Move enemy `e` by (mx,my), per-axis, skipping any step into a wall tile. */
-  nudgeEnemy(e, mx, my) {
-    if (!this.isWallAt(e.x + mx, e.y)) e.x += mx;
-    if (!this.isWallAt(e.x, e.y + my)) e.y += my;
-    e.body.updateFromGameObject(); // keep the physics body in sync with the move
   }
 
   /** True if world-point (x,y) lies in a wall tile. */
