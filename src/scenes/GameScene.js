@@ -435,8 +435,11 @@ export class GameScene extends Phaser.Scene {
 
     this.physics.add.collider(this.enemies, this.walls);
     this.physics.add.collider(this.player, this.enemies);
-    // Enemy-vs-enemy spacing is enforced explicitly in separateEnemies() — the
-    // Arcade collider doesn't reliably push apart enemies moving in lockstep.
+    // NB: no enemies-vs-enemies physics collider. Arcade won't reliably push
+    // apart bodies that are already co-located/stationary, so overlap is instead
+    // guaranteed by the position-based separateEnemies() each frame, while the
+    // boids steering in updateEnemies() keeps a chasing pack from ever piling
+    // into that state (which is what used to make them feel stuck).
   }
 
   /**
@@ -1329,7 +1332,7 @@ export class GameScene extends Phaser.Scene {
     if (!this.frozen) this.updateProjectiles(delta);
     if (!this.frozen) this.updateBombs(delta);
     if (!this.frozen) {
-      this.separateEnemies();
+      this.separateEnemies(); // hard no-overlap guarantee (see method comment)
       for (const e of this.enemies.getChildren()) {
         if (e.active) this.updateFistsFor(e, time, ENEMY.radius);
       }
@@ -1550,37 +1553,6 @@ export class GameScene extends Phaser.Scene {
    * never occupy the same space (deterministic — doesn't rely on Arcade's
    * collision separation, which is unreliable for lockstep-moving bodies).
    */
-  separateEnemies() {
-    const minDist = UNIT.radius * 2 * 0.95; // allow up to 5% visual overlap
-    const es = this.enemies.getChildren();
-    for (let i = 0; i < es.length; i++) {
-      const a = es[i];
-      if (!a.active) continue;
-      for (let j = i + 1; j < es.length; j++) {
-        const b = es[j];
-        if (!b.active) continue;
-
-        let dx = b.x - a.x;
-        let dy = b.y - a.y;
-        let d = Math.hypot(dx, dy);
-        if (d === 0) {
-          dx = 1; // nudge apart if perfectly stacked
-          dy = 0;
-          d = 1;
-        }
-        if (d < minDist) {
-          const push = (minDist - d) / 2;
-          const nx = dx / d;
-          const ny = dy / d;
-          a.x -= nx * push;
-          a.y -= ny * push;
-          b.x += nx * push;
-          b.y += ny * push;
-        }
-      }
-    }
-  }
-
   /**
    * True if a straight line from (ax,ay) to (bx,by) crosses no wall tiles.
    * Samples the grid a few times per tile — good enough for tile-sized walls.
@@ -1734,19 +1706,118 @@ export class GameScene extends Phaser.Scene {
       }
 
       e.facing = angleBetween(e.x, e.y, p.x, p.y); // turn to face the player
+      const sp = e.slowTimer > 0 ? e.speed * e.slowMult : e.speed; // slowed?
+      const sep = this.enemySeparation(e); // push away from crowding neighbours
       if (d <= e.weapon.range) {
-        e.setVelocity(0, 0); // in reach — stop and swing
+        // In reach: swing at the player. Don't hard-stop into a pile — if others
+        // are stacking on the same spot, keep drifting apart (gently) so a mob
+        // spreads AROUND the player instead of overlapping into one blob.
+        const sl = Math.hypot(sep.x, sep.y);
+        if (sl > 0.001) e.setVelocity((sep.x / sl) * sp * 0.6, (sep.y / sl) * sp * 0.6);
+        else e.setVelocity(0, 0);
         e.attackTarget = p; // fists box the player
         if (e.attackTimer <= 0) {
           e.weapon.attack({ scene: this, owner: e, target: p });
           e.attackTimer = e.weapon.cooldown * ATTACK_COOLDOWN_MULT;
         }
       } else {
-        const sp = e.slowTimer > 0 ? e.speed * e.slowMult : e.speed; // slowed?
-        e.setVelocity(Math.cos(e.facing) * sp, Math.sin(e.facing) * sp);
+        // Beeline toward the player (still FACING them so fists/aim are right),
+        // blended with the separation push so a converging pack flows around
+        // itself instead of jamming onto one tile.
+        let vx = Math.cos(e.facing) + sep.x;
+        let vy = Math.sin(e.facing) + sep.y;
+        const len = Math.hypot(vx, vy) || 1;
+        e.setVelocity((vx / len) * sp, (vy / len) * sp);
         e.attackTarget = null; // fists ride on the sides while chasing
       }
     }
+  }
+
+  /**
+   * Boids-style separation for enemy `e`: a steering vector pointing away from
+   * other enemies within a couple of body-widths, weighted by how close each one
+   * is (0 at the edge of range, strongest when touching). Blended into the chase
+   * direction in updateEnemies() so a converging pack spreads and slides past
+   * each other rather than wedging into one spot. O(n²) over enemies — trivial
+   * for the handful alive per level.
+   */
+  enemySeparation(e) {
+    const R = UNIT.radius * 2.4; // start easing apart at ~2.4 radii
+    const STRENGTH = 1.6; // > 1 so a tight cluster can briefly override the chase
+    const kids = this.enemies.getChildren();
+    const myIdx = kids.indexOf(e);
+    let sx = 0;
+    let sy = 0;
+    for (let k = 0; k < kids.length; k++) {
+      const o = kids[k];
+      if (o === e || !o.active) continue;
+      const dx = e.x - o.x;
+      const dy = e.y - o.y;
+      const d = Math.hypot(dx, dy);
+      if (d < 0.01) {
+        // (Near-)exactly stacked: a symmetric push would send both the SAME way
+        // and they'd never part (the lockstep trap). Break it deterministically
+        // by index so the pair escapes along OPPOSITE directions.
+        sx += myIdx < k ? -1 : 1;
+      } else if (d < R) {
+        const w = (R - d) / R; // 0 at edge → 1 at contact
+        sx += (dx / d) * w;
+        sy += (dy / d) * w;
+      }
+    }
+    return { x: sx * STRENGTH, y: sy * STRENGTH };
+  }
+
+  /**
+   * Hard guarantee that no two enemies visually overlap. The boids steering in
+   * updateEnemies() keeps a pack flowing apart, but steering is a soft force —
+   * this resolves any residual overlap directly by position (Arcade's collider
+   * won't reliably separate co-located bodies). Each overlapping pair is pushed
+   * apart to a full body-width, but a push is only applied on an axis if it
+   * doesn't shove the enemy into a wall tile — so nothing ever wedges into
+   * geometry (the old version's failure mode). O(n²), trivial for a few enemies.
+   */
+  separateEnemies() {
+    const minDist = UNIT.radius * 2; // touching, not overlapping
+    const es = this.enemies.getChildren();
+    for (let i = 0; i < es.length; i++) {
+      const a = es[i];
+      if (!a.active) continue;
+      for (let j = i + 1; j < es.length; j++) {
+        const b = es[j];
+        if (!b.active) continue;
+
+        let dx = b.x - a.x;
+        let dy = b.y - a.y;
+        let d = Math.hypot(dx, dy);
+        if (d >= minDist) continue;
+        if (d < 0.01) {
+          // Perfectly stacked: pick a deterministic axis by index so the pair
+          // parts instead of being nudged the same way.
+          dx = i < j ? -1 : 1;
+          dy = 0;
+          d = 1;
+        }
+        const push = (minDist - d) / 2;
+        const nx = (dx / d) * push;
+        const ny = (dy / d) * push;
+        this.nudgeEnemy(a, -nx, -ny);
+        this.nudgeEnemy(b, nx, ny);
+      }
+    }
+  }
+
+  /** Move enemy `e` by (mx,my), per-axis, skipping any step into a wall tile. */
+  nudgeEnemy(e, mx, my) {
+    if (!this.isWallAt(e.x + mx, e.y)) e.x += mx;
+    if (!this.isWallAt(e.x, e.y + my)) e.y += my;
+    e.body.updateFromGameObject(); // keep the physics body in sync with the move
+  }
+
+  /** True if world-point (x,y) lies in a wall tile. */
+  isWallAt(x, y) {
+    const row = this.level.grid[Math.floor(y / TILE)];
+    return !row || row[Math.floor(x / TILE)] === WALL;
   }
 
   /** Redraw all world-space bars/labels: player HP+XP+level, and each enemy. */

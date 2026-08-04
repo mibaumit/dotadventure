@@ -52,8 +52,8 @@ export class Enemy extends Phaser.Physics.Arcade.Sprite {
     this.setDepth(1);
     this.setCollideWorldBounds(true);
 
-    // Shrink the physics body to 95% of the sprite so enemies may overlap by
-    // ~5% but can't share the same space (see GameScene.separateEnemies).
+    // Physics body ~95% of the sprite so wall/player/enemy collision stays snug
+    // while still allowing a hair of visual overlap before bodies touch.
     this.body.setSize(this.width * 0.95, this.height * 0.95, true);
 
     // Two little fist-dots on the enemy's sides, in a darker shade of its colour.
