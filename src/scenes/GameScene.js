@@ -346,12 +346,6 @@ export class GameScene extends Phaser.Scene {
       this.player.hasShield = c.hasShield ?? false;
     }
 
-    // Training sandbox: enough HP to poke every enemy without dying instantly.
-    if (this.training) {
-      this.player.maxHp = 100;
-      this.player.hp = 100;
-    }
-
     // Two little fist-dots that ride on the character's sides (darker shade).
     this.player.fistL = this.makeFist();
     this.player.fistR = this.makeFist();

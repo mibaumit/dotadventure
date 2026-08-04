@@ -66,5 +66,5 @@ item without the dungeon in the way:
   you can keep practising.
 - **A chest for every item** — a column of chests near the start, each **forced**
   to hold one specific item (`chest.forcedItem`), so you can grab any loadout.
-- The player starts with a **generous 100 HP** so you can poke things without
-  dying instantly. A down-staircase in a corner still lets you leave.
+- The player starts with the **same HP as a normal run** (10). A down-staircase in
+  a corner still lets you leave.
