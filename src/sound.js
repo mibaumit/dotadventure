@@ -13,6 +13,8 @@ let sfxBus = null; // game sounds (footsteps, punches, growls) route here
 let noise = null;
 let currentTrack = null; // handle { stop() } for the playing music track
 let musicTrackIndex = 0; // which track in MUSIC_TRACKS is playing
+let musicSuppressed = false; // true while music is intentionally off (e.g. time-freeze),
+// so an incidental ensureStarted() (fired on every click/keypress) won't restart it
 
 // Master volume, cycled by the on-screen sound icon (full → half → mute).
 const VOLUME_LEVELS = [0.6, 0.3, 0];
@@ -76,7 +78,16 @@ export function ensureStarted() {
   init();
   if (ctx.state === 'suspended') ctx.resume();
   suspendedByBlur = false; // an explicit user start clears any blur-pause
-  startMusic();
+  if (!musicSuppressed) startMusic(); // don't revive music that was deliberately silenced
+}
+
+/**
+ * Mark music as intentionally on/off. While suppressed, the incidental
+ * ensureStarted() calls fired on every click/keypress won't restart the track —
+ * so a time-freeze (or any deliberate stop) stays quiet until explicitly resumed.
+ */
+export function suppressMusic(on) {
+  musicSuppressed = !!on;
 }
 
 // --- Auto-pause when the tab/window loses focus, resume when it returns ------

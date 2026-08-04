@@ -27,7 +27,9 @@ import {
   playExplosion,
   cycleVolume,
   cycleMusic,
+  startMusic,
   stopMusic,
+  suppressMusic,
   playPause,
 } from '../sound.js';
 import {
@@ -806,8 +808,15 @@ export class GameScene extends Phaser.Scene {
   toggleFreeze() {
     if (this.player.dead) return;
     this.frozen = !this.frozen;
-    if (this.frozen) this.physics.pause();
-    else this.physics.resume();
+    if (this.frozen) {
+      this.physics.pause();
+      suppressMusic(true); // keep clicks-during-freeze from reviving the track
+      stopMusic(); // silence the background track while time is frozen…
+    } else {
+      this.physics.resume();
+      suppressMusic(false);
+      startMusic(); // …and bring it back when play resumes
+    }
   }
 
   /** A brief expanding ring at a click-to-move destination. */

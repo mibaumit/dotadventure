@@ -82,6 +82,8 @@
 - Freezes the simulation (movement, enemy AI, combat, physics) but **keeps
   order-input live** — you can click to move/attack, then unfreeze to watch it
   play out.
+- **Background music stops while frozen** and resumes on unfreeze (like the pause
+  menu), so a time-freeze is quiet.
 - Bottom-right shows a large **▶ play / ⏸ pause** indicator reflecting the
   state, with a **mm:ss game timer** above it. The timer only advances during
   un-frozen play and carries across descents.

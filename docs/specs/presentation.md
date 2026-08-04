@@ -66,8 +66,8 @@ play screen (it lives on the pause menu instead, see below).
   **master** bus → **music** bus + **sfx** bus (the two pause-menu sliders); the
   bottom-left icon controls master.
 - **Music:** three selectable **background tracks** (cycle with the ♪ button —
-  see HUD), each fully synthesized. Music **stops while the game is paused** and
-  resumes on unpause.
+  see HUD), each fully synthesized. Music **stops while the game is paused or
+  time-frozen** and resumes on unpause / unfreeze.
   - *Dungeon score* — dark **drone pad** + a **distorted string** minor-key
     melody through a shared echo (Diablo-ish).
   - *Deep pulse* — a plucked minor **arpeggio** over a slow two-beat **bass
