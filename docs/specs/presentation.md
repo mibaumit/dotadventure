@@ -9,6 +9,8 @@ play screen (it lives on the pause menu instead, see below).
   mana item — a blue **mana bar** under that. This is where the character's **HP**
   lives (the level lives above the XP bar; see below).
 - **Top-right:** just `Stage N` (the dungeon depth, cyan) = how deep you are.
+- **Top-center (boss fights only):** a wide **boss health bar** with the boss's
+  name, shown **only once the boss is engaged** (hidden while it's dormant).
 - **Bottom-left:** clickable **sound icon** (speaker with waves / red-✕ when
   muted) — cycles master volume full → half → mute; next to it a **♪ music
   button** that cycles the background track (shows `n/total`).
@@ -75,6 +77,10 @@ play screen (it lives on the pause menu instead, see below).
   - *Crystal caverns* — an evolving four-chord **pad** (Am · F · Dm · E) with a
     soft **tolling bell** on each chord change and a sparse high pentatonic
     melody; brighter and more harmonically moving.
+  - *Boss theme* — a dedicated **battle track** that takes over during a boss
+    fight (`startBossMusic`/`stopBossMusic`): a dissonant low drone, a fast
+    driving bass ostinato, and dramatic distorted-string stabs. The regular track
+    resumes when the boss dies (or you leave).
 - **SFX:**
   - **Footsteps** — soft low thud on a ~300 ms cadence while moving.
   - **Punch** — noise smack + low thump, on the player's own hits.

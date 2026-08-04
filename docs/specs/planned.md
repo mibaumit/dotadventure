@@ -47,8 +47,9 @@ The item overhaul is built (see [items.md](items.md) for the full detail):
 - ⬜ **Mouse-aimed special attacks** — weapon `special()` behaviors exist but no
   key is bound (Space became time-freeze).
 - ⬜ **More enemy types** (the ramming **dart** and the fireball **caster**
-  shipped — see [entities.md](entities.md); diamonds/other shapes ready),
-  **new tiles**, **boss rooms**.
+  shipped — see [entities.md](entities.md); diamonds/other shapes ready) and
+  **new tiles**. **Boss rooms shipped** — every 5th depth is a **Warden** fight
+  (see [world.md](world.md)); more bosses to come.
 - ⬜ **Steam packaging** (Tauri/Electron wrapper) + Steamworks (achievements,
   cloud saves).
 

@@ -64,7 +64,22 @@ item without the dungeon in the way:
 - **One of every enemy** (melee square, dart, caster), placed across the room.
   **Killed enemies respawn** after `TRAINING.respawnMs` (5 s) at their spot, so
   you can keep practising.
+- **A boss chamber** — a walled-off room (top-right) with a doorway — holds **The
+  Warden**. It stays dormant (no bar, no music) until you walk in to fight it, and
+  respawns after death like the others. One chamber per boss (just the Warden now).
 - **A chest for every item** — a column of chests near the start, each **forced**
   to hold one specific item (`chest.forcedItem`), so you can grab any loadout.
 - The player starts with the **same HP as a normal run** (10). A down-staircase in
   a corner still lets you leave.
+
+## Boss rooms ✅ (every 5th depth)
+
+Every depth divisible by 5 (5, 10, 15…) is a **boss room** instead of a normal
+dungeon (`GameScene.isBoss`):
+
+- **Open arena** (`makeBossLevel`) — one big room, **no fog**, no regular spawns.
+  The player enters at the bottom; **The Warden** (see [entities.md](entities.md))
+  waits in the centre and engages immediately, with **boss music**.
+- **The down-staircase is sealed** until the boss dies (`bossDefeated`); on the
+  kill the boss drops a **reward chest** (from the depth item pool) and the way
+  down opens. Boss HP scales with the boss tier.

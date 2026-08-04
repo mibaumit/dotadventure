@@ -360,18 +360,55 @@ export function playAggro() {
 // Selectable background music tracks (each builder returns a { stop() } handle).
 const MUSIC_TRACKS = [startDungeonScore, startPulseScore, startCrystalScore];
 
-/** Start the current music track (idempotent — no-op if one is already playing). */
+let bossTrack = null; // handle for the boss battle theme while it plays
+let inBoss = false; // true during a boss fight → music routes to the boss theme
+
+/**
+ * Start the current music track (idempotent). During a boss fight it (re)starts
+ * the boss theme instead of the regular track.
+ */
 export function startMusic() {
-  if (!ctx || currentTrack) return;
+  if (!ctx) return;
+  if (inBoss) {
+    if (!bossTrack) bossTrack = startBossScore();
+    return;
+  }
+  if (currentTrack) return;
   currentTrack = MUSIC_TRACKS[musicTrackIndex]();
 }
 
-/** Stop the background music entirely (e.g. while the game is paused). */
+/** Stop all background music (regular AND boss theme), e.g. while paused. */
 export function stopMusic() {
   if (currentTrack) {
     currentTrack.stop();
     currentTrack = null;
   }
+  if (bossTrack) {
+    bossTrack.stop();
+    bossTrack = null;
+  }
+}
+
+/** Switch to the driving boss battle theme (silences the regular track). */
+export function startBossMusic() {
+  if (!ctx || inBoss) return;
+  inBoss = true;
+  if (currentTrack) {
+    currentTrack.stop();
+    currentTrack = null;
+  }
+  bossTrack = startBossScore();
+}
+
+/** End the boss theme and resume the regular background track. */
+export function stopBossMusic() {
+  if (!inBoss) return;
+  inBoss = false;
+  if (bossTrack) {
+    bossTrack.stop();
+    bossTrack = null;
+  }
+  startMusic();
 }
 
 /** A soft descending two-tone "blip" — played when the game is paused. */
@@ -657,6 +694,85 @@ function startCrystalScore() {
       clearTimeout(chordTimer);
       clearTimeout(mTimer);
       stopTrack(out, [...padOscs, lfo], null);
+    },
+  };
+}
+
+/**
+ * Boss battle theme — urgent and menacing: a dissonant low drone, a fast driving
+ * bass ostinato, and dramatic distorted-string stabs with a half-step "dread"
+ * motif. Faster and heavier than the exploration tracks.
+ */
+function startBossScore() {
+  const out = ctx.createGain();
+  out.gain.value = 0.0001;
+  out.gain.linearRampToValueAtTime(0.5, ctx.currentTime + 1.2); // quick, urgent fade-in
+  out.connect(musicBus);
+
+  // Tight echo.
+  const delay = ctx.createDelay(1.0);
+  delay.delayTime.value = 0.24;
+  const feedback = ctx.createGain();
+  feedback.gain.value = 0.3;
+  delay.connect(feedback).connect(delay);
+  delay.connect(out);
+
+  // Menacing low drone with a beating dissonance.
+  const droneGain = ctx.createGain();
+  droneGain.gain.value = 0.3;
+  droneGain.connect(out);
+  const filter = ctx.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.frequency.value = 300;
+  filter.connect(droneGain);
+  const d1 = ctx.createOscillator();
+  d1.type = 'sawtooth';
+  d1.frequency.value = 55; // A1
+  const d2 = ctx.createOscillator();
+  d2.type = 'sawtooth';
+  d2.frequency.value = 58.27; // A#1 — a grinding half-step against the root
+  d2.detune.value = 5;
+  d1.connect(filter);
+  d2.connect(filter);
+  const oscs = [d1, d2];
+  oscs.forEach((o) => o.start());
+
+  const beat = 340; // fast, urgent
+
+  // Driving bass ostinato (eighth notes) that leans on tension tones.
+  const BASS = [110.0, 110.0, 110.0, 130.81, 110.0, 110.0, 98.0, 103.83];
+  let bStep = 0;
+  let bTimer = null;
+  const bassTick = () => {
+    playPluck(BASS[bStep % BASS.length], 0.28, 'sawtooth', 700, 0.3, out, delay);
+    bStep++;
+    bTimer = setTimeout(bassTick, beat / 2);
+  };
+
+  // Dramatic distorted-string stabs — the boss motif (A minor with a Bb menace).
+  const MEL = [
+    [220.0, 2], [233.08, 1], [220.0, 1],
+    [174.61, 2], [196.0, 2],
+    [220.0, 2], [261.63, 1], [233.08, 1],
+    [220.0, 4], [null, 2],
+  ];
+  let mStep = 0;
+  let mTimer = null;
+  const melTick = () => {
+    const [f, b] = MEL[mStep % MEL.length];
+    if (f) playStringNote(f, ((b * beat) / 1000) * 0.9, out, delay);
+    mStep++;
+    mTimer = setTimeout(melTick, b * beat);
+  };
+
+  bTimer = setTimeout(bassTick, 200);
+  mTimer = setTimeout(melTick, beat * 4);
+
+  return {
+    stop: () => {
+      clearTimeout(bTimer);
+      clearTimeout(mTimer);
+      stopTrack(out, oscs, null);
     },
   };
 }

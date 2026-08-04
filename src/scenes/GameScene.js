@@ -8,13 +8,14 @@
 // this file is structured so those systems each become their own small method.
 // ============================================================================
 
-import { TILE, COLORS, UNIT, ENEMY, DART, CASTER, GAME, HOTBAR, BOW, BOMB, POTION, MANA, PIXEL, PROJECTILE, SHIELD, SWORD_SHIELD, COMBAT, FROST, FISTS, TRAINING, ATTACK_COOLDOWN_MULT, LEVELUP } from '../config.js';
+import { TILE, COLORS, UNIT, ENEMY, DART, CASTER, BOSS, GAME, HOTBAR, BOW, BOMB, POTION, MANA, PIXEL, PROJECTILE, SHIELD, SWORD_SHIELD, COMBAT, FROST, FISTS, TRAINING, ATTACK_COOLDOWN_MULT, LEVELUP } from '../config.js';
 import { generateLevel, WALL, FLOOR, roomCenterTile } from '../levelgen.js';
 import { makeShapeTexture, shapeTextureKey } from '../shapes.js';
 import { makeRng, randInt, dist, angleDelta, angleBetween, clamp, TAU, pick } from '../util.js';
 import { Enemy } from '../entities/Enemy.js';
 import { EnemyDart } from '../entities/EnemyDart.js';
 import { EnemyCaster } from '../entities/EnemyCaster.js';
+import { EnemyBoss } from '../entities/EnemyBoss.js';
 import { Projectile } from '../entities/Projectile.js';
 import { getWeapon } from '../weapons.js';
 import { getItem, itemPoolForDepth, ITEM_SHAPES, ITEM_IDS } from '../items.js';
@@ -31,6 +32,8 @@ import {
   cycleMusic,
   startMusic,
   stopMusic,
+  startBossMusic,
+  stopBossMusic,
   suppressMusic,
   playPause,
 } from '../sound.js';
@@ -61,11 +64,15 @@ export class GameScene extends Phaser.Scene {
     this.foundItems = new Set(data?.foundItems ?? []); // items already looted this run
     this.lootedChests = new Set(data?.lootedChests ?? []); // depths whose chest is opened
     this.training = data?.training ?? false; // open sandbox: one of every enemy + item
+    this.isBoss = !this.training && this.depth % 5 === 0; // every 5th depth is a boss room
+    this.bossDefeated = false; // set true when the boss dies → the exit opens
   }
 
   create() {
     this.modalOpen = false; // true while the chest-item info dialog is up
     this.bombs = []; // live dropped bombs (ticking fuses)
+    // Leaving this scene (descend, restart, quit) always ends any boss theme.
+    this.events.once('shutdown', () => stopBossMusic());
     this.buildTextures();
     this.buildLevel();
     this.buildExit();
@@ -118,6 +125,7 @@ export class GameScene extends Phaser.Scene {
     makeShapeTexture(this, shapeTextureKey('square'), 'square', size);
     makeShapeTexture(this, shapeTextureKey('dart'), 'dart', size); // ramming needle
     makeShapeTexture(this, shapeTextureKey('x'), 'x', size); // caster's green X
+    makeShapeTexture(this, shapeTextureKey('hexagon'), 'hexagon', BOSS.radius * 2); // Warden boss
     makeShapeTexture(this, 'fist', 'circle', Math.round(UNIT.radius * 0.8)); // little punch
 
     // Scroll of Frozen Orb: parchment scroll with a blue orb (multi-colour, so
@@ -230,12 +238,14 @@ export class GameScene extends Phaser.Scene {
   buildLevel() {
     this.level = this.training
       ? this.makeTrainingLevel(GAME.tilesW, GAME.tilesH)
-      : generateLevel({
-          width: GAME.tilesW,
-          height: GAME.tilesH,
-          depth: this.depth,
-          seed: this.seed,
-        });
+      : this.isBoss
+        ? this.makeBossLevel(GAME.tilesW, GAME.tilesH)
+        : generateLevel({
+            width: GAME.tilesW,
+            height: GAME.tilesH,
+            depth: this.depth,
+            seed: this.seed,
+          });
 
     this.worldW = this.level.width * TILE;
     this.worldH = this.level.height * TILE;
@@ -281,9 +291,53 @@ export class GameScene extends Phaser.Scene {
       }
       grid.push(row);
     }
+
+    // A walled-off boss chamber in the top-right, with a doorway you walk through
+    // to start the fight. One chamber per boss (just the Warden for now).
+    const bossChambers = [];
+    const chW = 12;
+    const chH = 9;
+    const cx0 = width - 3 - chW;
+    const cy0 = 2;
+    const cx1 = cx0 + chW;
+    const cy1 = cy0 + chH;
+    for (let x = cx0; x <= cx1; x++) {
+      grid[cy0][x] = WALL;
+      grid[cy1][x] = WALL;
+    }
+    for (let y = cy0; y <= cy1; y++) {
+      grid[y][cx0] = WALL;
+      grid[y][cx1] = WALL;
+    }
+    const doorX = Math.floor((cx0 + cx1) / 2); // 2-wide doorway in the bottom wall
+    grid[cy1][doorX] = FLOOR;
+    grid[cy1][doorX + 1] = FLOOR;
+    bossChambers.push({ tx: Math.floor((cx0 + cx1) / 2), ty: Math.floor((cy0 + cy1) / 2) });
+
     const rooms = [{ x: 1, y: 1, w: width - 2, h: height - 2 }];
     const start = { tx: Math.floor(width * 0.18), ty: Math.floor(height / 2) };
-    const exit = { tx: width - 3, ty: 2 };
+    const exit = { tx: 2, ty: height - 3 };
+    return { grid, width, height, rooms, start, exit, bossChambers };
+  }
+
+  /**
+   * The boss arena: one open room (like the training arena). The player enters at
+   * the bottom, the Warden waits at the centre, and the down-staircase sits at the
+   * top — but it stays inert until the boss dies (see checkStairs / bossDefeated).
+   */
+  makeBossLevel(width, height) {
+    const grid = [];
+    for (let y = 0; y < height; y++) {
+      const row = [];
+      for (let x = 0; x < width; x++) {
+        const border = x === 0 || y === 0 || x === width - 1 || y === height - 1;
+        row.push(border ? WALL : FLOOR);
+      }
+      grid.push(row);
+    }
+    const rooms = [{ x: 1, y: 1, w: width - 2, h: height - 2 }];
+    const start = { tx: Math.floor(width / 2), ty: height - 3 };
+    const exit = { tx: Math.floor(width / 2), ty: 2 };
     return { grid, width, height, rooms, start, exit };
   }
 
@@ -443,6 +497,14 @@ export class GameScene extends Phaser.Scene {
       return;
     }
 
+    // Boss room: just the Warden in the centre.
+    if (this.isBoss) {
+      this.spawnBoss((GAME.tilesW / 2) * TILE, (GAME.tilesH * 0.42) * TILE);
+      this.physics.add.collider(this.enemies, this.walls);
+      this.physics.add.collider(this.player, this.enemies);
+      return;
+    }
+
     const rng = makeRng(this.seed + this.depth * 7919);
 
     // Keep a buffer around BOTH staircases so nothing can aggro the player the
@@ -512,6 +574,24 @@ export class GameScene extends Phaser.Scene {
       const y = (ty + 0.5) * TILE;
       this.spawnTrainingEnemy(make, x, y);
     });
+
+    // A Warden waits in each boss chamber (respawns like the others).
+    for (const c of this.level.bossChambers ?? []) {
+      const bx = (c.tx + 0.5) * TILE;
+      const by = (c.ty + 0.5) * TILE;
+      this.spawnTrainingEnemy((x, y) => new EnemyBoss(this, x, y, { level: 5, maxHp: BOSS.hp }), bx, by);
+    }
+  }
+
+  /** Spawn the Warden at (x,y), scaling its HP with the boss tier, and cue music. */
+  spawnBoss(x, y) {
+    const tier = Math.max(1, Math.round(this.depth / 5)); // 1 at depth 5, 2 at 10, …
+    const maxHp = BOSS.hp + (tier - 1) * BOSS.hpPerTier;
+    const boss = new EnemyBoss(this, x, y, { level: this.depth, maxHp });
+    this.enemies.add(boss);
+    this.boss = boss;
+    startBossMusic(); // ominous track for the fight
+    return boss;
   }
 
   /** Spawn one training enemy at (x,y), tagged so it can respawn on death. */
@@ -544,6 +624,9 @@ export class GameScene extends Phaser.Scene {
       this.spawnTrainingChests();
       return;
     }
+
+    // Boss room: no random chest — the Warden drops a reward chest when it dies.
+    if (this.isBoss) return;
 
     // A chest opened on a previous visit stays looted — don't respawn it when
     // the player climbs back down to this depth (enemies do respawn; chests don't).
@@ -1024,6 +1107,51 @@ export class GameScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setDepth(101)
       .setOrigin(0.5, 0.5);
+
+    // Boss health bar (screen-fixed, top-centre) — only shown during a boss fight.
+    this.bossFx = this.add.graphics().setScrollFactor(0).setDepth(120).setVisible(false);
+    this.bossText = this.add
+      .text(0, 0, '', {
+        fontFamily: 'monospace',
+        fontSize: '15px',
+        color: '#ffd7d7',
+        fontStyle: 'bold',
+        stroke: '#0d1019',
+        strokeThickness: 3,
+      })
+      .setScrollFactor(0)
+      .setDepth(121)
+      .setOrigin(0.5, 0.5)
+      .setVisible(false);
+  }
+
+  /** Draw the big Warden health bar across the top of the screen. */
+  drawBossBar(e) {
+    const g = this.bossFx;
+    const { width } = this.scale;
+    const w = Math.min(460, width - 80);
+    const h = 14;
+    const x = (width - w) / 2;
+    const y = 20;
+    const pct = clamp(e.hp / e.maxHp, 0, 1);
+    g.setVisible(true);
+    g.clear();
+    g.fillStyle(0x000000, 0.55);
+    g.fillRect(x - 2, y - 2, w + 4, h + 4);
+    g.fillStyle(COLORS.enemyBoss, 1);
+    g.fillRect(x, y, w * pct, h);
+    g.lineStyle(1, 0x2a3350, 1);
+    g.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+    this.bossText
+      .setVisible(true)
+      .setText(`${e.bossName ?? 'Boss'}   ${Math.ceil(e.hp)}/${e.maxHp}`)
+      .setPosition(width / 2, y - 12);
+  }
+
+  /** Hide the boss bar (no active boss). */
+  hideBossBar() {
+    if (this.bossFx) this.bossFx.setVisible(false);
+    if (this.bossText) this.bossText.setVisible(false);
   }
 
   /** Draw the top-left ☰ menu button (opens the pause menu) + its tap area. */
@@ -1120,8 +1248,8 @@ export class GameScene extends Phaser.Scene {
     this.fog = this.add.graphics().setDepth(60);
     this.lastFogCX = -999;
     this.lastFogCY = -999;
-    if (this.training) {
-      this.revealEntireMap(); // sandbox: no fog, everything on show
+    if (this.training || this.isBoss) {
+      this.revealEntireMap(); // sandbox / boss arena: no fog, everything on show
       return;
     }
     this.markStartRoomExplored(); // the whole first room is revealed up front
@@ -1519,8 +1647,8 @@ export class GameScene extends Phaser.Scene {
     }
 
     // Fog of war: re-reveal when the dot crosses a fog cell (smooth updates).
-    // The training arena is fully revealed once, so it skips this entirely.
-    if (!this.training) {
+    // The training/boss arenas are fully revealed once, so they skip this.
+    if (!this.training && !this.isBoss) {
       const fcx = Math.floor(this.player.x / this.fogCell);
       const fcy = Math.floor(this.player.y / this.fogCell);
       if (fcx !== this.lastFogCX || fcy !== this.lastFogCY) {
@@ -1617,6 +1745,7 @@ export class GameScene extends Phaser.Scene {
    */
   checkStairs() {
     if (this.transitioning) return;
+    if (this.isBoss && !this.bossDefeated) return; // the exit is sealed until the boss dies
     const p = this.player;
     const reach = TILE * 0.55; // step onto a staircase to use it…
     const armDist = TILE * 1.5; // …but it only arms once you've clearly walked off it
@@ -1853,6 +1982,10 @@ export class GameScene extends Phaser.Scene {
       }
       if (e.kind === 'caster') {
         this.updateCaster(e, delta);
+        continue;
+      }
+      if (e.kind === 'boss') {
+        this.updateBoss(e, delta);
         continue;
       }
       if (e.attackTimer > 0) e.attackTimer -= delta;
@@ -2180,6 +2313,216 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  /**
+   * Boss AI ("The Warden"): a big enemy with three HP-keyed phases —
+   *   1 (>66%)  charger: stalk in, wind up, dash straight
+   *   2 (>33%)  caster: plant and lob fan volleys of fireballs
+   *   3 (≤33%)  enrage: faster charges AND periodic dart adds
+   * Body contact hurts in every phase (rate-limited).
+   */
+  updateBoss(e, delta) {
+    const p = this.player;
+    if (e.attackTimer > 0) e.attackTimer -= delta;
+    if (e.contactTimer > 0) e.contactTimer -= delta;
+    if (e.slowTimer > 0) {
+      e.slowTimer -= delta;
+      if (e.slowTimer <= 0) e.setTint(e.baseColor);
+    }
+    const slow = e.slowTimer > 0 ? e.slowMult : 1;
+
+    if (!e.announcedAggro) {
+      playAggro();
+      e.announcedAggro = true;
+    }
+
+    if (p.dead) {
+      e.setVelocity(0, 0);
+      return;
+    }
+
+    e.facing = angleBetween(e.x, e.y, p.x, p.y); // always face the player
+    const d = dist(e.x, e.y, p.x, p.y);
+
+    // In the training sandbox the Warden waits in its chamber: it only wakes (and
+    // the boss music + bar only appear) once you come to fight it.
+    if (this.training) {
+      if (d > 380) {
+        e.setVelocity(0, 0);
+        e.engaged = false; // dormant → hide the boss bar
+        if (this._bossMusicOn) {
+          stopBossMusic();
+          this._bossMusicOn = false;
+        }
+        return;
+      }
+      if (!this._bossMusicOn) {
+        startBossMusic();
+        this._bossMusicOn = true;
+      }
+    }
+    e.engaged = true; // the fight is on → show the boss bar
+
+    // Body contact damage (uses the boss's big radius).
+    if (e.contactTimer <= 0 && d <= e.radius + UNIT.radius) {
+      p.takeDamage(BOSS.contactDamage);
+      e.contactTimer = BOSS.contactCooldown;
+    }
+
+    // Pick the phase from remaining HP.
+    const frac = e.hp / e.maxHp;
+    const phase = frac > BOSS.phase2At ? 1 : frac > BOSS.phase3At ? 2 : 3;
+    if (phase !== e.bossPhase) {
+      e.bossPhase = phase;
+      e.chargeState = 'approach'; // reset the charge cycle on a phase change
+      this.showDamageNumber(e.x, e.y - e.radius, phase === 3 ? 'ENRAGE!' : 'Phase ' + phase, '#ff9a9a');
+    }
+
+    if (phase === 2) {
+      this.bossCast(e, delta);
+    } else {
+      this.bossCharge(e, delta, slow, d, phase);
+      if (phase === 3) this.bossSpawnAdds(e, delta);
+    }
+  }
+
+  /** Charger behaviour: approach → windup → straight-line dash → recover. */
+  bossCharge(e, delta, slow, d, phase) {
+    const spMult = (phase === 3 ? BOSS.enrageChargeMult : 1) * slow;
+    switch (e.chargeState) {
+      case 'windup':
+        e.setVelocity(0, 0);
+        e.chargeTimer -= delta;
+        if (e.chargeTimer <= 0) {
+          e.chargeVX = Math.cos(e.facing); // lock the dash onto the player's spot
+          e.chargeVY = Math.sin(e.facing);
+          e.chargeState = 'charge';
+          e.chargeTimer = BOSS.chargeDuration;
+          playArrow();
+        }
+        break;
+      case 'charge': {
+        const v = BOSS.chargeSpeed * (phase === 3 ? BOSS.enrageChargeMult : 1);
+        e.setVelocity(e.chargeVX * v, e.chargeVY * v);
+        e.chargeTimer -= delta;
+        const aheadTx = Math.floor((e.x + e.chargeVX * (e.radius + 4)) / TILE);
+        const aheadTy = Math.floor((e.y + e.chargeVY * (e.radius + 4)) / TILE);
+        const blocked = !this.level.grid[aheadTy] || this.level.grid[aheadTy][aheadTx] === WALL;
+        if (e.chargeTimer <= 0 || blocked) {
+          e.chargeState = 'recover';
+          e.chargeTimer = BOSS.chargeRecover;
+        }
+        break;
+      }
+      case 'recover':
+        e.setVelocity(0, 0);
+        e.chargeTimer -= delta;
+        if (e.chargeTimer <= 0) e.chargeState = 'approach';
+        break;
+      default: // approach
+        if (d <= BOSS.chargeRange) {
+          e.chargeState = 'windup';
+          e.chargeTimer = BOSS.chargeWindup;
+          e.setVelocity(0, 0);
+        } else {
+          const sp = BOSS.approachSpeed * spMult;
+          e.setVelocity(Math.cos(e.facing) * sp, Math.sin(e.facing) * sp);
+        }
+    }
+  }
+
+  /** Caster phase: plant and loose a fan volley of fireballs on cooldown. */
+  bossCast(e, delta) {
+    e.setVelocity(0, 0);
+    if (e.attackTimer > 0) return;
+    const base = e.facing;
+    const n = BOSS.fanCount;
+    for (let i = 0; i < n; i++) {
+      const t = n === 1 ? 0.5 : i / (n - 1);
+      const a = base - BOSS.fanSpread / 2 + BOSS.fanSpread * t;
+      this.spawnBossFireball(e, a);
+    }
+    e.attackTimer = BOSS.castCooldown;
+  }
+
+  /** One green fireball from the boss, reusing the projectile system. */
+  spawnBossFireball(e, angle) {
+    const weapon = {
+      projectileSpeed: BOSS.fireballSpeed,
+      damage: BOSS.fireballDamage,
+      projectileColor: COLORS.fireball,
+      projectileTexture: 'fireball',
+      kind: 'ranged',
+    };
+    this.spawnProjectile(e, angle, weapon, { spawnDist: e.radius + 6 });
+  }
+
+  /** Enrage: periodically spawn dart adds (up to BOSS.maxAdds alive). */
+  bossSpawnAdds(e, delta) {
+    e.addTimer -= delta;
+    if (e.addTimer > 0) return;
+    const liveAdds = this.enemies.getChildren().filter((a) => a.active && a.isBossAdd).length;
+    if (liveAdds >= BOSS.maxAdds) return;
+    const a = Math.random() * TAU;
+    const add = new EnemyDart(this, e.x + Math.cos(a) * 40, e.y + Math.sin(a) * 40, { level: this.depth });
+    add.isBossAdd = true;
+    add.alerted = true;
+    add.dartPhase = 'approach';
+    this.enemies.add(add);
+    e.addTimer = BOSS.addInterval;
+  }
+
+  /** Boss down: stop the music, clear adds, open the exit, and drop a reward. */
+  onBossDefeated(boss) {
+    this.bossDefeated = true;
+    this.boss = null;
+    this._bossMusicOn = false;
+    stopBossMusic(); // back to the regular track
+    // Clear any dart adds it summoned.
+    for (const a of this.enemies.getChildren()) {
+      if (a.active && a.isBossAdd) a.die();
+    }
+    this.hideBossBar();
+    if (this.training) {
+      this.showBanner('The Warden falls!'); // it respawns shortly in the sandbox
+    } else {
+      this.showBanner('The Warden falls — the way down opens!');
+      this.dropBossChest(boss.x, boss.y); // guaranteed reward
+    }
+  }
+
+  /** A reward chest dropped where the boss died (opens from the depth item pool). */
+  dropBossChest(x, y) {
+    const chest = this.physics.add.sprite(x, y, 'chest').setDepth(0);
+    chest.setImmovable(true);
+    chest.opened = false;
+    this.physics.add.overlap(this.player, chest, () => this.openChest(chest));
+  }
+
+  /** A big screen-centred announcement that fades (boss defeat, etc.). */
+  showBanner(text) {
+    const label = this.add
+      .text(this.scale.width / 2, this.scale.height * 0.32, text, {
+        fontFamily: 'monospace',
+        fontSize: '30px',
+        color: '#ffd7d7',
+        fontStyle: 'bold',
+        stroke: '#0d1019',
+        strokeThickness: 4,
+      })
+      .setOrigin(0.5)
+      .setScrollFactor(0)
+      .setDepth(220);
+    this.tweens.add({
+      targets: label,
+      alpha: { from: 1, to: 0 },
+      y: label.y - 26,
+      delay: 1400,
+      duration: 1400,
+      ease: 'Quad.easeIn',
+      onComplete: () => label.destroy(),
+    });
+  }
+
   /** Rotate `cur` toward `target` by at most `maxStep` radians (shortest way). */
   turnToward(cur, target, maxStep) {
     const diff = angleDelta(cur, target);
@@ -2321,18 +2664,31 @@ export class GameScene extends Phaser.Scene {
     this.drawShieldCooldown(this.player);
 
     // Enemies: HP bar + level number + face each.
+    let bossOnScreen = false;
     for (const e of this.enemies.getChildren()) {
       if (!e.active) continue;
+      const r = e.radius ?? ENEMY.radius;
+      // The boss uses a big top-of-screen health bar — but only once it's engaged
+      // (started fighting), so a dormant Warden in its chamber shows no bar.
+      if (e.kind === 'boss') {
+        if (e.showEyes) this.drawFace(e, r);
+        if (e.engaged) {
+          this.drawBossBar(e);
+          bossOnScreen = true;
+        }
+        continue;
+      }
       this.drawHealthBar(e, ENEMY.radius);
       if (e.kind === 'caster') this.drawCasterStaff(e);
       if (e.showEyes) this.drawFace(e, ENEMY.radius);
       if (e.slowTimer > 0 && e.slowMult <= 0.6) {
         // Thin blue ring marks a Frozen-Orb-chilled enemy (not brief fist jabs).
         this.fx.lineStyle(1.5, FROST.tint, 0.9);
-        this.fx.strokeCircle(e.x, e.y, ENEMY.radius + 4);
+        this.fx.strokeCircle(e.x, e.y, r + 4);
       }
-      this.placeLevelNumber(e.label, e, ENEMY.radius);
+      if (e.label) this.placeLevelNumber(e.label, e, ENEMY.radius);
     }
+    if (!bossOnScreen) this.hideBossBar();
 
     this.drawBowReticle(this.player); // marks the enemy the bow will shoot
     this.drawBombs(); // burning fuses on dropped bombs
@@ -2816,6 +3172,7 @@ export class GameScene extends Phaser.Scene {
         this.showDamageNumber(tx + 16, ty + 6, `+${target.level} XP`, '#ffcf5c');
         this.grantXp(target.level);
         this.dropPixels(tx, ty);
+        if (target.kind === 'boss') this.onBossDefeated(target);
         // Training arena: the same enemy returns after a delay so you can keep at it.
         if (this.training && target.trainingSpawn) {
           const { make, x, y } = target.trainingSpawn;
@@ -3121,7 +3478,7 @@ export class GameScene extends Phaser.Scene {
       if (pr.faction === 'player') {
         for (const e of this.enemies.getChildren()) {
           if (!e.active || pr.hitTargets.has(e)) continue;
-          if (dist(pr.x, pr.y, e.x, e.y) <= ENEMY.radius + PROJECTILE.radius) {
+          if (dist(pr.x, pr.y, e.x, e.y) <= (e.radius ?? ENEMY.radius) + PROJECTILE.radius) {
             this.dealDamage(e, pr.damage);
             pr.hitTargets.add(e);
             if (pr.faction === 'player') playPunch(); // the usual impact sound

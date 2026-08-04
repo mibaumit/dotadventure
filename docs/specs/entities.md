@@ -125,6 +125,33 @@ like the melee square while idle).
 - De-aggro past `ENEMY.aggroRange`, growls once on waking, and is chilled by the
   Frozen Orb like any enemy.
 
+### Boss: The Warden ✅ (`entities/EnemyBoss.js`)
+
+The first boss — a **big crimson hexagon** (`BOSS.radius = 26`, ~2× a normal
+enemy) fought in a **boss room every 5th depth** and in the **Training Room's boss
+chamber** (see [world.md](world.md)). All numbers live in `config.js → BOSS`; the
+AI is `GameScene.updateBoss`.
+
+- **HP scales with depth:** `BOSS.hp` (40) + `BOSS.hpPerTier` (20) per boss depth
+  beyond the first. A wide **boss health bar** sits at the top of the screen — and
+  only appears **once the fight is engaged** (see below), not while it's dormant.
+- **Three telegraphed phases**, keyed to remaining HP:
+  - **Phase 1 (>66%) — Charger:** stalks in at `BOSS.approachSpeed`, winds up
+    (`BOSS.chargeWindup`), then **dashes in a locked straight line**
+    (`BOSS.chargeSpeed`), recovers, repeats.
+  - **Phase 2 (33–66%) — Caster:** plants and looses **fan volleys** of
+    `BOSS.fanCount` green fireballs (`BOSS.fanSpread`) on `BOSS.castCooldown`.
+  - **Phase 3 (≤33%) — Enrage:** charges **faster** (`BOSS.enrageChargeMult`)
+    **and** periodically summons **dart adds** (up to `BOSS.maxAdds`).
+- **Body contact** hurts (`BOSS.contactDamage`, rate-limited by `BOSS.contactCooldown`).
+- **Engagement:** in a boss room the fight is on immediately; in the training
+  chamber the Warden **waits dormant** until the player comes within range —
+  then it wakes, the **boss music** starts, and the **bar appears** (all reset if
+  the player leaves).
+- **On death:** boss music stops, any adds are cleared, and — in a real boss room —
+  a **reward chest** drops and the sealed **down-staircase opens** (`bossDefeated`).
+  In training it just **respawns** after `TRAINING.respawnMs`.
+
 ## Projectiles ✅ (`entities/Projectile.js`)
 
 - Arrows/bolts/orbs fired by ranged weapons (the player's Bow and the caster's

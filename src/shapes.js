@@ -56,6 +56,17 @@ export const SHAPES = {
     ); // "/" bar
   },
 
+  hexagon(g, size) {
+    // Pointy-top hexagon filling the box (used big, for the Warden boss).
+    const r = size / 2;
+    const pts = [];
+    for (let i = 0; i < 6; i++) {
+      const a = -Math.PI / 2 + i * (Math.PI / 3);
+      pts.push({ x: r + Math.cos(a) * r, y: r + Math.sin(a) * r });
+    }
+    g.fillPoints(pts, true);
+  },
+
   diamond(g, size) {
     const h = size / 2;
     g.fillPoints(

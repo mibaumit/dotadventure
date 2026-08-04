@@ -22,6 +22,7 @@ export const COLORS = {
   enemyDart: 0xffe14d, // the charging needle (thin yellow triangle)
   enemyCaster: 0x59d94b, // the green-X hexer that lobs fireballs from a staff
   fireball: 0x8dff5a, // the caster's green fireball projectile (brighter than its body)
+  enemyBoss: 0xd23b3b, // the Warden — a big crimson hexagon boss
 
   hpBack: 0x000000,
   hpGood: 0x57e389,
@@ -88,6 +89,34 @@ export const CASTER = {
 // enemy and a chest per item. Killed enemies respawn so you can keep practising.
 export const TRAINING = {
   respawnMs: 5000, // a killed training enemy returns after this delay
+};
+
+// The Warden — the first boss (a big crimson hexagon). Fought in a boss room
+// every 5th depth (and in the Training Room's boss chamber). Three telegraphed
+// phases by HP: (1) charger, (2) fireball caster, (3) enrage — faster charges +
+// dart adds. Driven by GameScene.updateBoss.
+export const BOSS = {
+  radius: 26, // big body (≈2× a normal enemy)
+  hp: 40, // base HP at the first boss depth…
+  hpPerTier: 20, // …plus this per boss depth beyond it (depth 10 = 60, 15 = 80)
+  approachSpeed: 96, // slow stalk toward the player
+  chargeRange: 250, // winds up a charge once the player is within this
+  chargeSpeed: 470, // the dash
+  chargeWindup: 850, // ms telegraph before a charge
+  chargeDuration: 480, // ms the dash lasts
+  chargeRecover: 750, // ms pause after a charge
+  enrageChargeMult: 1.4, // phase-3 charges/approach are this much faster
+  contactDamage: 3, // touching the boss body hurts…
+  contactCooldown: 1200, // …at most this often (ms)
+  phase2At: 0.66, // HP fraction to enter the caster phase
+  phase3At: 0.33, // HP fraction to enter the enrage phase
+  fanCount: 5, // fireballs per caster volley
+  fanSpread: Math.PI * 0.55, // total angular width of the fan
+  fireballDamage: 3,
+  fireballSpeed: 300,
+  castCooldown: 1600, // ms between fireball volleys
+  addInterval: 3500, // ms between dart-add spawns (enrage)
+  maxAdds: 2, // most dart adds alive at once
 };
 
 export const FORMATION = {
