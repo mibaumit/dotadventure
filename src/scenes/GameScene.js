@@ -229,6 +229,7 @@ export class GameScene extends Phaser.Scene {
 
     this.worldW = this.level.width * TILE;
     this.worldH = this.level.height * TILE;
+    this.flowField = null; // new grid → discard any chase field from the last level
 
     // Floor: one big rectangle behind everything.
     this.add
@@ -581,8 +582,7 @@ export class GameScene extends Phaser.Scene {
       .setStrokeStyle(2, item.color)
       .setScrollFactor(0)
       .setDepth(D + 1)
-      .setInteractive({ useHandCursor: true });
-    panel.on('pointerdown', () => this.dismissItemDialog()); // click/tap the box
+      .setInteractive({ useHandCursor: true }); // hand cursor; dismissal handled scene-side
     objs.push(panel);
     objs.push(
       this.add
@@ -745,7 +745,7 @@ export class GameScene extends Phaser.Scene {
     // A tap/click: on-screen UI first (so touch can drive everything), then a
     // world order — tap an enemy to attack it, the ground to walk there.
     this.input.on('pointerdown', (pointer) => {
-      if (this.modalOpen) return; // dialog swallows the tap (it dismisses)
+      if (this.modalOpen) return void this.dismissItemDialog(); // tap anywhere closes the dialog; nothing else acts on this tap
       // On-screen buttons consume the tap (menu / freeze / sound / music / bar).
       if (pointInRect(pointer, this.soundRect)) return void cycleVolume();
       if (pointInRect(pointer, this.musicRect)) return void cycleMusic();
@@ -1654,13 +1654,58 @@ export class GameScene extends Phaser.Scene {
       return;
     }
     const speed = e.speed * 0.5; // amble slower than a chase
-    e.facing = Math.atan2(dy, dx); // look where you're walking
-    e.setVelocity((dx / d) * speed, (dy / d) * speed);
+    let dirX = dx / d;
+    let dirY = dy / d;
+    // Sidestep any patrol-mate in the way. This is PERPENDICULAR steering (go
+    // around), not repulsion (back off): pushing straight apart deadlocks two
+    // enemies walking toward each other — separateEnemies() shoves them back as
+    // fast as they step forward, so they freeze face-to-face. A perpendicular
+    // nudge preserves forward speed and lets them flow past instead.
+    const av = this.patrolAvoid(e, dirX, dirY);
+    dirX += av.x;
+    dirY += av.y;
+    const len = Math.hypot(dirX, dirY) || 1;
+    dirX /= len;
+    dirY /= len;
+    e.facing = Math.atan2(dirY, dirX); // look where you're actually heading
+    e.setVelocity(dirX * speed, dirY * speed);
+  }
+
+  /**
+   * Sidestep steering for a patrolling enemy: for each other enemy that's close
+   * and roughly AHEAD of `e`'s heading (dirX,dirY), return a vector perpendicular
+   * to the heading, pointing to whichever side clears the blocker. Perpendicular
+   * (not repulsive) so it curves the path around a bump without killing forward
+   * motion — the fix for the head-on patrol deadlock. O(n²) over the handful of
+   * live enemies.
+   */
+  patrolAvoid(e, dirX, dirY) {
+    const R = UNIT.radius * 3; // start easing around within ~3 radii
+    let ax = 0;
+    let ay = 0;
+    for (const o of this.enemies.getChildren()) {
+      if (o === e || !o.active) continue;
+      const ox = o.x - e.x;
+      const oy = o.y - e.y;
+      const dist = Math.hypot(ox, oy);
+      if (dist < 0.01 || dist > R) continue;
+      const ahead = (ox * dirX + oy * dirY) / dist; // 1 = dead ahead, ≤0 = beside/behind
+      if (ahead <= 0.15) continue; // only dodge things in front of us
+      const w = ((R - dist) / R) * ahead; // closer & more head-on → stronger
+      // Which side is the blocker on? cross>0 → to our left, so veer right.
+      const cross = dirX * oy - dirY * ox;
+      const side = cross > 0 ? -1 : 1;
+      ax += -dirY * side * w; // left-perpendicular of the heading, signed to the open side
+      ay += dirX * side * w;
+    }
+    const AVOID = 1.6; // > 1 so a close blocker can dominate and clearly steer around
+    return { x: ax * AVOID, y: ay * AVOID };
   }
 
   /** Enemy AI: chase the player when seen & in range, punch when adjacent. */
   updateEnemies(delta) {
     const p = this.player;
+    this.ensureFlowField(); // refresh the chase gradient if the player changed tiles
     for (const e of this.enemies.getChildren()) {
       if (!e.active) continue;
       if (e.attackTimer > 0) e.attackTimer -= delta;
@@ -1721,16 +1766,147 @@ export class GameScene extends Phaser.Scene {
           e.attackTimer = e.weapon.cooldown * ATTACK_COOLDOWN_MULT;
         }
       } else {
-        // Beeline toward the player (still FACING them so fists/aim are right),
-        // blended with the separation push so a converging pack flows around
-        // itself instead of jamming onto one tile.
-        let vx = Math.cos(e.facing) + sep.x;
-        let vy = Math.sin(e.facing) + sep.y;
+        // Head toward the player. With a clear line of sight, beeline straight
+        // (smooth across open rooms); otherwise follow the flow field downhill
+        // so we route AROUND walls instead of grinding into a corner. Still FACE
+        // the player so fists/aim stay right; blend the separation push so a
+        // converging pack flows around itself instead of jamming onto one tile.
+        let dx;
+        let dy;
+        if (this.hasLineOfSight(e.x, e.y, p.x, p.y)) {
+          dx = Math.cos(e.facing);
+          dy = Math.sin(e.facing);
+        } else {
+          const step = this.flowStep(e); // path direction around the walls
+          if (step) {
+            dx = step.x;
+            dy = step.y;
+          } else {
+            dx = Math.cos(e.facing); // no path known — fall back to a beeline
+            dy = Math.sin(e.facing);
+          }
+        }
+        let vx = dx + sep.x;
+        let vy = dy + sep.y;
         const len = Math.hypot(vx, vy) || 1;
         e.setVelocity((vx / len) * sp, (vy / len) * sp);
         e.attackTarget = null; // fists ride on the sides while chasing
       }
     }
+  }
+
+  /**
+   * Refresh the chase flow field if the player has walked onto a new tile (it's
+   * a gradient measured from the player, so only their tile matters). Cheap BFS —
+   * recomputing only on a tile change keeps it near-free. Every alerted enemy
+   * then just walks downhill on this field, so pathing cost is O(1) per enemy
+   * regardless of how many are chasing.
+   */
+  ensureFlowField() {
+    const W = this.level.width;
+    const H = this.level.height;
+    const grid = this.level.grid;
+    const ptx = Math.floor(this.player.x / TILE);
+    const pty = Math.floor(this.player.y / TILE);
+    if (this.flowField && this.flowTX === ptx && this.flowTY === pty) return; // still current
+
+    // (Re)allocate the distance buffer once per level, then reuse it each frame.
+    if (!this.flowField || this.flowField.length !== W * H) {
+      this.flowField = new Int32Array(W * H);
+    }
+    const distField = this.flowField;
+    distField.fill(-1); // -1 = wall / not yet reached
+    this.flowTX = ptx;
+    this.flowTY = pty;
+
+    // Guard: a player tile off-grid or in a wall yields no field (enemies then
+    // fall back to a beeline). Shouldn't happen, but keeps the BFS well-formed.
+    if (ptx < 0 || pty < 0 || ptx >= W || pty >= H || grid[pty][ptx] === WALL) {
+      this.flowField = null; // mark unusable this frame
+      return;
+    }
+
+    // Breadth-first flood from the player over floor tiles: distField holds the
+    // step-count back to the player, so a lower neighbour is always "toward" them.
+    const queue = new Int32Array(W * H);
+    let head = 0;
+    let tail = 0;
+    const start = pty * W + ptx;
+    distField[start] = 0;
+    queue[tail++] = start;
+    while (head < tail) {
+      const cell = queue[head++];
+      const cx = cell % W;
+      const cy = (cell - cx) / W;
+      const nd = distField[cell] + 1;
+      // 4-connected flood (corridors are axis-aligned; diagonals are handled at
+      // read time in flowStep with a corner-cut guard).
+      if (cx > 0 && grid[cy][cx - 1] !== WALL && distField[cell - 1] < 0) {
+        distField[cell - 1] = nd;
+        queue[tail++] = cell - 1;
+      }
+      if (cx < W - 1 && grid[cy][cx + 1] !== WALL && distField[cell + 1] < 0) {
+        distField[cell + 1] = nd;
+        queue[tail++] = cell + 1;
+      }
+      if (cy > 0 && grid[cy - 1][cx] !== WALL && distField[cell - W] < 0) {
+        distField[cell - W] = nd;
+        queue[tail++] = cell - W;
+      }
+      if (cy < H - 1 && grid[cy + 1][cx] !== WALL && distField[cell + W] < 0) {
+        distField[cell + W] = nd;
+        queue[tail++] = cell + W;
+      }
+    }
+  }
+
+  /**
+   * Direction (unit vector) enemy `e` should move to follow the flow field toward
+   * the player, routing around walls. Picks the neighbouring tile with the lowest
+   * step-count (diagonals only when not cutting a wall corner) and aims at its
+   * centre. Returns null if no field / no downhill neighbour (caller beelines).
+   */
+  flowStep(e) {
+    const field = this.flowField;
+    if (!field) return null;
+    const W = this.level.width;
+    const H = this.level.height;
+    const grid = this.level.grid;
+    const tx = Math.floor(e.x / TILE);
+    const ty = Math.floor(e.y / TILE);
+    if (tx < 0 || ty < 0 || tx >= W || ty >= H) return null;
+    const here = field[ty * W + tx];
+    if (here < 0) return null; // enemy sits on an unreachable/wall tile
+
+    let best = here;
+    let bx = tx;
+    let by = ty;
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        const nx = tx + dx;
+        const ny = ty + dy;
+        if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+        if (grid[ny][nx] === WALL) continue;
+        const nd = field[ny * W + nx];
+        if (nd < 0) continue;
+        // Don't cut a diagonal through a wall corner (would clip geometry).
+        if (dx !== 0 && dy !== 0 && (grid[ty][nx] === WALL || grid[ny][tx] === WALL)) continue;
+        if (nd < best) {
+          best = nd;
+          bx = nx;
+          by = ny;
+        }
+      }
+    }
+    if (bx === tx && by === ty) return null; // already at/adjacent to the target tile
+
+    const cxp = (bx + 0.5) * TILE;
+    const cyp = (by + 0.5) * TILE;
+    const vx = cxp - e.x;
+    const vy = cyp - e.y;
+    const l = Math.hypot(vx, vy) || 1;
+    return { x: vx / l, y: vy / l };
   }
 
   /**
@@ -1782,10 +1958,15 @@ export class GameScene extends Phaser.Scene {
     const es = this.enemies.getChildren();
     for (let i = 0; i < es.length; i++) {
       const a = es[i];
-      if (!a.active) continue;
+      // Only push apart enemies that are AGGROED. Idle patrollers get no backward
+      // separation push — that push is what deadlocks a bumping pair (they'd be
+      // shoved back as fast as they walk forward). Their sidestep steering keeps
+      // them from overlapping in the first place; if it can't, they just pass
+      // through instead of freezing.
+      if (!a.active || !a.alerted) continue;
       for (let j = i + 1; j < es.length; j++) {
         const b = es[j];
-        if (!b.active) continue;
+        if (!b.active || !b.alerted) continue;
 
         let dx = b.x - a.x;
         let dy = b.y - a.y;

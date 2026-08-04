@@ -51,11 +51,22 @@
 - **Cone display:** the sight cone is drawn (raycast-clipped by walls) only for
   un-alerted enemies the **player can currently see**.
 
-### Spacing & death ✅
+### Movement, spacing & death ✅
 
-- **Spacing:** enemies never overlap more than ~5% of their size — a
-  deterministic separation pass (bodies at 95%) pushes them apart (Arcade's own
-  collider was unreliable for lockstep movers).
+- **Chase pathfinding:** an alerted enemy with a **clear line of sight** beelines
+  the player; otherwise it follows a **flow field** — a BFS distance field flooded
+  from the player's tile (rebuilt only when the player changes tiles, so it's
+  near-free) — *downhill*, routing **around walls** instead of grinding into them.
+- **Aggroed spacing:** alerted enemies are pushed apart by a deterministic
+  separation pass (bodies at 95%) so a chasing pack never piles onto one tile
+  (Arcade's own collider was unreliable for lockstep movers).
+- **Idle spacing / no freeze:** patrolling (un-alerted) enemies are **not** pushed
+  apart — that backward push *deadlocks* two enemies walking toward each other
+  (they get shoved back as fast as they step forward and freeze face-to-face).
+  Instead each patroller **sidesteps**: it steers *perpendicular* (around) any
+  patrol-mate ahead of it, preserving forward speed, so they flow past and keep
+  moving. If a sidestep can't fully clear a pileup, idle enemies simply pass
+  through rather than lock up.
 - **Corpses:** a killed enemy is **not removed** — it becomes a greyed, faded,
   inert corpse beneath the living (no AI/collision/HUD/fists), but the kill
   still grants XP and can drop loot.

@@ -4,8 +4,10 @@
 
 - Grid of `GAME.tilesW × GAME.tilesH` = **48 × 32** tiles, `TILE = 40` px each
   (world = 1920 × 1280 px). Tiles are `0 = wall`, `1 = floor`.
-- **Rooms:** `5 + depth` rooms attempted, random size **5–9 × 4–8** tiles,
-  non-overlapping (1-tile gap). Deeper levels have more rooms.
+- **Rooms:** `5 + depth` rooms attempted, non-overlapping (1-tile gap). Deeper
+  levels have more rooms. **Mixed sizes:** ~⅓ of rooms are **big halls**
+  (**11–16 × 8–12** tiles), the rest are modest boxes (**5–9 × 4–8**), so a level
+  has some large open spaces instead of all cramped rooms.
 - **Corridors:** consecutive room centers connected by **L-shaped, 2-tile-wide**
   tunnels, so the whole dungeon is traversable.
 - **Deterministic:** seeded RNG (`seed + depth × 1013`) → a given depth/seed

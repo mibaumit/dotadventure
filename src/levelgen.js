@@ -68,8 +68,12 @@ export function generateLevel({ width, height, depth = 1, seed = 1 }) {
 /** @typedef {{x:number,y:number,w:number,h:number}} Room  (tile coordinates) */
 
 function randomRoom(rng, width, height) {
-  const w = randInt(rng, 5, 9);
-  const h = randInt(rng, 4, 8);
+  // Mix of sizes: most rooms are modest, but ~1 in 3 is a big open hall so levels
+  // have some large spaces (room to manoeuvre, bigger fights) rather than all
+  // cramped boxes.
+  const big = rng() < 0.34;
+  const w = big ? randInt(rng, 11, 16) : randInt(rng, 5, 9);
+  const h = big ? randInt(rng, 8, 12) : randInt(rng, 4, 8);
   const x = randInt(rng, 1, width - w - 2);
   const y = randInt(rng, 1, height - h - 2);
   return { x, y, w, h };
