@@ -5,9 +5,10 @@
 | Input | Action |
 |---|---|
 | **WASD** | Move the dot directly (normalized; diagonals aren't faster) |
-| **Left-click** | **Attack toward the cursor** (free aim; one shot per weapon cooldown) |
+| **Left-click enemy** | **Auto-attack that enemy** — lock it as the target, move into range, keep hitting it until it dies |
+| **Left-click ground** | **Move there** (MOBA-style click-to-move) — does **not** cancel the attack target |
 | **Left-click sound icon** (bottom-left) | Cycle volume: full → half → mute |
-| **Space** | Toggle **time-freeze** (tactical pause; attacking is disabled while frozen) |
+| **Space** | Toggle **time-freeze** (tactical pause) |
 | **1–9** | Use the item in that action-bar slot |
 | **Esc** | Pause menu (Continue / Restart + volume sliders) |
 | **Enter** | Confirm Restart on the death screen |
@@ -15,24 +16,31 @@
 | Walk onto the **▲ staircase** | Climb back to the previous level (levels below the first) |
 | Walk onto a **chest** | Open it (loot pops out) |
 
-## Movement ✅
+## Movement ✅ (MOBA-style)
 
-- **WASD-only:** movement sets velocity directly (`UNIT.speed = 178` px/s); the
-  Arcade collider slides the dot along walls (only the into-wall component is
-  lost). A glancing wall hit merely *slows* the dot; a **90° head-on stops it**.
-- **Clicks never move** — a click always attacks (see Combat). There is no
-  click-to-move / attack-move.
+- **Click-to-move:** left-click the ground to walk there (`UNIT.speed = 178`
+  px/s), easing down within `UNIT.arriveRadius = 30` and stopping within
+  `UNIT.stopRadius = 6`. **WASD** also moves directly (overrides a click-move).
+- Neither WASD nor a click-move **cancels the attack target** — you keep
+  auto-attacking while you reposition / kite.
+- **Chasing:** with no move order, the dot walks toward its attack target until
+  the target is in weapon range, then holds.
+- **Wall behaviour:** the Arcade collider slides the dot along walls (only the
+  into-wall component is lost); a glancing hit merely *slows* it, a **90° head-on
+  stops it**. With no pathfinding yet, a click-move gives up after ~**1.2 s** of
+  no progress.
 
-## Combat ✅ (click to attack, free aim)
+## Combat ✅ (target the clicked enemy)
 
-- **Every attack is a click.** There is **no auto-attack** — the dot only swings
-  or shoots when you left-click, aiming **toward the cursor** (free aim). One
-  shot per click, gated by the weapon's cooldown (holding does nothing extra).
-- **Melee** sweeps a cone (`±UNIT.attackArc ≈ 75°`) toward the aim, hitting every
-  enemy in it; **ranged** fires a projectile straight at the cursor.
+- **Click an enemy to attack it.** That enemy becomes the **only** auto-attack
+  target — the dot faces it and swings/shoots on cooldown whenever it's in weapon
+  range (and visible, for a bow), **even while moving**. It stays the target
+  until it dies or you click another enemy.
+- **No attacking untargeted enemies** — nothing is hit automatically just for
+  being nearby; you must click it.
 - Default weapon is **Fists** (`weapons.js`): range 40, cooldown 420 ms,
   **1 damage**. Attacks read on screen as a **side-fist punch** thrust toward
-  the aim; a red marker briefly flags the click point.
+  the target; while boxing, both fists hold toward it.
 - **Fist stagger:** a landed fist punch **staggers** the enemy — a brief slow
   (`FISTS.slowMult` for `FISTS.slowDuration`) plus a small **knockback**
   (`FISTS.knockback`, wall-clamped so a cornered enemy is never shoved through

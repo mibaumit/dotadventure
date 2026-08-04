@@ -759,9 +759,21 @@ export class GameScene extends Phaser.Scene {
       if (this.player.dead) return;
       if (!pointer.leftButtonDown()) return;
 
-      // A world click ATTACKS toward the cursor (free aim, one shot per cooldown).
-      // Movement is WASD-only — a click never moves the dot anymore.
-      this.firePlayerAttack(pointer.worldX, pointer.worldY);
+      const enemy = this.enemyAt(pointer.worldX, pointer.worldY);
+      if (enemy) {
+        // Attack order: lock this enemy as the auto-attack target and move into
+        // range. It stays the target until it dies or you click another enemy.
+        this.player.focusEnemy = enemy;
+        this.player.moveTarget = null;
+        this.showAttackMarker(enemy.x, enemy.y);
+      } else {
+        // Move order: walk to the spot (MOBA-style click-to-move). This does NOT
+        // clear the attack target — you keep auto-attacking while you reposition.
+        this.player.moveTarget = { x: pointer.worldX, y: pointer.worldY };
+        this.player.bestDist = Infinity; // reset progress tracker for the new order
+        this.player.stuckTime = 0;
+        this.showMoveMarker(pointer.worldX, pointer.worldY);
+      }
     });
 
     // Space toggles a tactical time-freeze: simulation halts, but you can still
@@ -2286,12 +2298,63 @@ export class GameScene extends Phaser.Scene {
     if (k.S.isDown) vy += 1;
 
     if (vx !== 0 || vy !== 0) {
+      p.moveTarget = null; // manual control overrides a click-move…
+      // …but NOT the attack target: auto-attack keeps going while you move.
       const len = Math.hypot(vx, vy);
       p.setVelocity((vx / len) * UNIT.speed, (vy / len) * UNIT.speed);
       return;
     }
 
-    p.setVelocity(0, 0); // WASD-only movement; clicks attack, they don't move
+    // A click-to-move order takes priority over chasing, so you can reposition /
+    // kite while still auto-attacking the focus enemy. Steer toward it, slow on
+    // approach, stop on arrival.
+    if (p.moveTarget) {
+      const dx = p.moveTarget.x - p.x;
+      const dy = p.moveTarget.y - p.y;
+      const d = Math.hypot(dx, dy);
+      if (d <= UNIT.stopRadius) {
+        p.moveTarget = null;
+        p.setVelocity(0, 0);
+        return;
+      }
+
+      // The wall collider slides the dot along walls — a glancing touch merely
+      // slows it (by the hit angle) rather than stopping it dead.
+      const speed = d < UNIT.arriveRadius ? UNIT.speed * (d / UNIT.arriveRadius) : UNIT.speed;
+      p.setVelocity((dx / d) * speed, (dy / d) * speed);
+
+      // Only give up if we make no real progress for a while (no pathfinding yet).
+      if (d < p.bestDist - 1) {
+        p.bestDist = d;
+        p.stuckTime = 0;
+      } else {
+        p.stuckTime += delta;
+        if (p.stuckTime > 1200) {
+          p.moveTarget = null;
+          p.setVelocity(0, 0);
+        }
+      }
+      return;
+    }
+
+    // No move order: chase the attack target into weapon range, then hold.
+    if (p.focusEnemy) {
+      if (!p.focusEnemy.active) {
+        p.focusEnemy = null;
+      } else {
+        const ex = p.focusEnemy.x - p.x;
+        const ey = p.focusEnemy.y - p.y;
+        const d = Math.hypot(ex, ey);
+        if (d <= p.weapon.range) {
+          p.setVelocity(0, 0); // in reach — hold position and let combat swing
+        } else {
+          p.setVelocity((ex / d) * UNIT.speed, (ey / d) * UNIT.speed);
+        }
+        return;
+      }
+    }
+
+    p.setVelocity(0, 0);
   }
 
   /** Play a footstep sound on a steady cadence while the dot is moving. */
@@ -2306,49 +2369,42 @@ export class GameScene extends Phaser.Scene {
   }
 
   /**
-   * Player combat is CLICK-DRIVEN (see firePlayerAttack) — no auto-attack and no
-   * auto-target. This just ticks the weapon cooldown and keeps a held bow drawn
-   * in the "aiming" pose while it's the equipped weapon.
+   * Auto-attack the CLICKED (focus) enemy only — never anything you didn't
+   * target. Fires on cooldown whenever the focus is in weapon range (and visible
+   * for a bow), regardless of whether the dot is moving. No focus → no attack.
    */
   updatePlayerCombat(delta) {
     const p = this.player;
     if (p.attackTimer > 0) p.attackTimer -= delta;
-    p.usingBow = p.weapon.kind === 'ranged'; // bow held out front whenever equipped
-    p.attackTarget = null; // nothing is auto-targeted; fists idle until a click
-  }
 
-  /**
-   * Fire the equipped weapon ONCE toward a world point (free aim). This is the
-   * only way the player attacks — one shot per click, gated by weapon cooldown.
-   * Ranged shoots a projectile toward the cursor; melee sweeps a cone that way.
-   */
-  firePlayerAttack(wx, wy) {
-    const p = this.player;
-    if (p.dead || this.frozen) return; // no attacking while dead or time-frozen
-    if (p.attackTimer > 0) return; // still cooling down — one shot per cooldown
-    const aim = angleBetween(p.x, p.y, wx, wy);
-    p.facing = aim; // face the shot
-
-    const weapon = p.weapon;
-    if (weapon.kind === 'ranged') {
-      this.spawnProjectile(p, aim, weapon); // arrow flies toward the cursor
-      p.usingBow = true;
-      p.bowDraw = 1; // string / hand release animation
-    } else {
-      // Melee: damage every enemy inside the front cone toward the aim, and give
-      // each a little stagger (slow + knockback), same feel as the old fists.
-      for (const e of this.enemies.getChildren()) {
-        if (!e.active) continue;
-        if (dist(p.x, p.y, e.x, e.y) > weapon.range) continue;
-        if (Math.abs(angleDelta(aim, angleBetween(p.x, p.y, e.x, e.y))) > UNIT.attackArc) continue;
-        this.dealDamage(e, weapon.damage);
-        this.fistImpact(e, p);
-      }
-      p.startSwing(aim); // thrust a fist toward the aim
+    const f = p.focusEnemy;
+    if (!f || !f.active) {
+      p.attackTarget = null;
+      p.usingBow = false;
+      return;
     }
-    p.attackTimer = weapon.cooldown * ATTACK_COOLDOWN_MULT;
-    p.attackCooldownMax = p.attackTimer;
-    this.showAttackMarker(wx, wy); // brief marker at the aim point
+
+    // Choose the weapon this frame: a bow that's point-blank on the target can't
+    // fire, so it punches instead.
+    const dToTarget = dist(p.x, p.y, f.x, f.y);
+    let weapon = p.weapon;
+    if (p.weapon.id === 'bow' && dToTarget < BOW.minRange) weapon = getWeapon('fists');
+    const ranged = weapon.kind === 'ranged';
+    p.usingBow = ranged;
+
+    // Always face and mark the target (fists box it / bow reticle sits on it),
+    // even when out of range or still closing in.
+    p.facing = angleBetween(p.x, p.y, f.x, f.y);
+    p.attackTarget = f;
+
+    const inRange = dToTarget <= weapon.range;
+    const visible = ranged ? this.enemyVisible(f) : true;
+    if (inRange && visible && p.attackTimer <= 0) {
+      weapon.attack({ scene: this, owner: p, target: f });
+      p.attackTimer = weapon.cooldown * ATTACK_COOLDOWN_MULT;
+      p.attackCooldownMax = p.attackTimer;
+      if (ranged) p.bowDraw = 1; // kick off the string/hand release animation
+    }
   }
 
   /**

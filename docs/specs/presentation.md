@@ -24,10 +24,10 @@ play screen (it lives on the pause menu instead, see below).
 - **World-space:** per-entity health bars (the player's floats above the dot too,
   mirrored on the avatar), the **level number drawn on each *enemy's* body** (the
   **player's is not** — it's on the HUD), faces, floating damage/heal numbers
-  **plus an amber `+N XP` on each kill**, a **red attack marker** at each click's
-  aim point, little **resource pixels** (red = HP, blue = mana) dropped by kills,
+  **plus an amber `+N XP` on each kill**, click markers (blue = move, red =
+  attack), little **resource pixels** (red = HP, blue = mana) dropped by kills,
   **arrow projectiles**, a two-handed **bow** (animated string) / **shield arc**
-  on the dot, small recharge bars
+  on the dot, a **crosshair reticle** on the bow's target, small recharge bars
   under the dot (white **bow reload**, blue **shield**), a **spark burst** on a
   landed fist, a thin **blue ring** around chilled (Frozen-Orb-slowed) enemies,
   and **rollable dropped bombs with a burning fuse** (a flickering flame that

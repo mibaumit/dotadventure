@@ -54,9 +54,9 @@ they **carry across descents** and show on the dot.
   arrows**, **damage = fists (1)**, and a **2 s cooldown** shown as a white
   loading bar under the dot. Held in **both hands** with an animated
   **string/hand draw & release** on each shot ("fffft" on loose, the usual
-  impact sound on hit). **Click to fire an arrow toward the cursor** (free aim);
-  the arrow flies until it hits a wall/enemy or its lifespan ends (reach ≈ line
-  of sight). No auto-targeting — every shot is a click.
+  impact sound on hit). Fires an arrow at the **clicked target enemy** on cooldown
+  while it's in range and visible (reach ≈ line of sight); a foe closer than
+  `BOW.minRange` (90 px) is **punched with fists** instead.
 - **Shield** (`shield`) — **fully blocks one incoming hit**, then recharges over
   `SHIELD.blockCooldown` (3 s) before it can block again. A block plays a
   **"plomp"**, the on-dot shield arc **dims while recharging**, and a **blue
