@@ -96,12 +96,17 @@ export class PauseScene extends Phaser.Scene {
     this.scene.stop();
   }
 
-  /** Restart the whole run from depth 1 with a fresh random dungeon. */
+  /**
+   * Restart the whole run from depth 1 with a fresh random dungeon — staying in
+   * the Training Room if that's where we were (mirror the current mode).
+   */
   restartGame() {
     startMusic(); // paused-off music resumes for the fresh run
+    const gs = this.scene.get('GameScene');
+    const training = gs ? gs.training : false;
     this.scene.stop();
     const seed = Math.floor(Math.random() * 0x7fffffff);
-    this.scene.start('GameScene', { depth: 1, seed });
+    this.scene.start('GameScene', { depth: 1, seed, training });
   }
 
   /** Abandon the run and return to the title screen. */

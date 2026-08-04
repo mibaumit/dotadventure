@@ -3010,7 +3010,7 @@ export class GameScene extends Phaser.Scene {
     btn.on('pointerover', () => btn.setColor('#ffffff'));
     btn.on('pointerout', () => btn.setColor('#cfe6ff'));
 
-    const restart = () => this.scene.restart({ depth: 1, seed: this.seed });
+    const restart = () => this.scene.restart({ depth: 1, seed: this.seed, training: this.training });
     btn.on('pointerdown', restart);
     this.input.keyboard.once('keydown-ENTER', restart); // confirm with Enter
   }
