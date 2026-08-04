@@ -19,6 +19,9 @@ export const COLORS = {
 
   enemyMelee: 0xff5a5a,
   enemyArcher: 0xffab3d,
+  enemyDart: 0xffe14d, // the charging needle (thin yellow triangle)
+  enemyCaster: 0x59d94b, // the green-X hexer that lobs fireballs from a staff
+  fireball: 0x8dff5a, // the caster's green fireball projectile (brighter than its body)
 
   hpBack: 0x000000,
   hpGood: 0x57e389,
@@ -48,6 +51,43 @@ export const ENEMY = {
   sightRange: 200, // sight-cone length: how far an enemy can actually see
   viewAngle: Math.PI / 4, // sight-cone half-angle (~45° → a 90° cone)
   lookSpeed: 0.7, // rad/sec an idle enemy sweeps its cone
+};
+
+// The Dart: a thin yellow triangle that only ever moves along its tip. While
+// unaware it wanders in serpentine half-circles (each a random radius, curling
+// the opposite way from the last). On spotting the player it runs in, freezes to
+// wind up (~1 s telegraph), then charges in a locked straight line very fast,
+// ramming for contact damage — then recovers and repeats the hit-and-run.
+export const DART = {
+  spawnChance: 0.4, // chance a spawned enemy is a dart instead of a melee square
+  patrolSpeed: 74, // glide speed while serpentining (unaware)
+  approachSpeed: 138, // run-in speed after spotting the player
+  chargeSpeed: 470, // the fast straight-line dash
+  turnRate: 3.4, // rad/sec it can re-aim its tip while approaching
+  windup: 1000, // ms it stops to telegraph before charging
+  chargeDuration: 430, // ms a charge dash lasts before it peters out
+  recover: 550, // ms pause after a charge before it runs in again
+  contactRange: 62, // distance to the player at which it stops to wind up
+  contactDamage: 2, // damage dealt whenever it's touching the player…
+  contactCooldown: 1500, // …at most once per this many ms (per dart)
+  arcRadiusMin: 55, // patrol half-circle radius range (px) — varied each half-circle
+  arcRadiusMax: 145,
+};
+
+// The Caster ("Hexer"): a green X that holds a staff in both hands and lobs a
+// green fireball at the player from range. A VERY slow mover — it holds ground
+// and keeps casting rather than kiting, and never melees. Combat numbers (range,
+// cooldown, damage, projectile speed) live on its weapon (weapons.green_staff);
+// only its movement/spawn tuning lives here.
+export const CASTER = {
+  spawnChance: 0.3, // chance a spawned enemy is a caster (see DART.spawnChance)
+  speed: 44, // px/s — a slow shuffle, only used to regain range / line of sight
+};
+
+// The Training Room: an open sandbox (from the main menu) with one of every
+// enemy and a chest per item. Killed enemies respawn so you can keep practising.
+export const TRAINING = {
+  respawnMs: 5000, // a killed training enemy returns after this delay
 };
 
 export const FORMATION = {
@@ -105,6 +145,7 @@ export const MANA = {
   restoreMin: 8, // mana added per blue pixel (inclusive range)
   restoreMax: 16,
   dropChance: 0.5, // chance a killed enemy drops a blue mana pixel (needs a held mana item)
+  regenPerSec: 3, // slow passive mana regeneration (points per second)
 };
 
 // The Bow: an equipment item found in a chest. On pickup it becomes the dot's
@@ -116,9 +157,21 @@ export const BOW = {
 };
 
 // The Shield: an equipment item found in a chest. It fully blocks one incoming
-// attack, then must recharge before it can block again.
+// attack, then must recharge before it can block again. Picking it up also arms a
+// SWORD (see SWORD_SHIELD) — the pair is a "Sword & Shield".
 export const SHIELD = {
   blockCooldown: 3000, // ms between blocks
+};
+
+// The Sword half of the Sword & Shield: while the Shield is held, your melee
+// attack becomes a wide sword swing that CLEAVES every enemy in a frontal arc
+// (with a bow, you still shoot at range and cleave only up close). Numbers here;
+// the swing itself is `weapons.shield_sword` + `GameScene.swordSwingArc`.
+export const SWORD_SHIELD = {
+  range: 64, // reach of the cleave (px)
+  halfArc: Math.PI * 0.45, // ~81° half → ~162° frontal arc (clearly multi-target)
+  damage: 1, // per enemy hit — same as the Bow (it makes up for it by cleaving all)
+  cooldown: 560, // ms between swings
 };
 
 // The Bomb: a reusable action-bar item (not consumed). Using it DROPS a bomb

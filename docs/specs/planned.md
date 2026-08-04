@@ -46,8 +46,9 @@ The item overhaul is built (see [items.md](items.md) for the full detail):
 - ⬜ **Weapon swap key (X)** to cycle the selected dot's weapon.
 - ⬜ **Mouse-aimed special attacks** — weapon `special()` behaviors exist but no
   key is bound (Space became time-freeze).
-- ⬜ **More enemy types** (triangles/diamonds — shapes ready), **new tiles**,
-  **boss rooms**.
+- ⬜ **More enemy types** (the ramming **dart** and the fireball **caster**
+  shipped — see [entities.md](entities.md); diamonds/other shapes ready),
+  **new tiles**, **boss rooms**.
 - ⬜ **Steam packaging** (Tauri/Electron wrapper) + Steamworks (achievements,
   cloud saves).
 

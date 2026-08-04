@@ -7,6 +7,7 @@
 | **WASD** | Move the dot directly (normalized; diagonals aren't faster) |
 | **Left-click enemy** | **Auto-attack that enemy** — lock it as the target, move into range, keep hitting it until it dies |
 | **Left-click ground** | **Move there** (MOBA-style click-to-move) — does **not** cancel the attack target |
+| **Right-click** (with the Bow) | Loose an **aimed arrow at the mouse pointer** (respects the bow's reload) |
 | **Left-click sound icon** (bottom-left) | Cycle volume: full → half → mute |
 | **Space** | Toggle **time-freeze** (tactical pause) |
 | **1–9** | Use the item in that action-bar slot |
@@ -51,6 +52,9 @@
 - **Damage numbers:** hitting an enemy shows `N` in the player's colour; taking
   damage shows `-N` in red. On a kill, an amber **`+N XP`** also floats up. All
   float and fade.
+- **Sword & Shield cleave:** while the **Shield** is equipped, the melee attack is
+  a **wide sword swing that hits every enemy in a frontal arc at once** (1 dmg each
+  — same as the bow). See [items.md](items.md).
 - Weapons carry `special()` behaviors (cleaves, power-shots) in the registry,
   but no key is currently bound to them (Space is time-freeze). 🟡
 

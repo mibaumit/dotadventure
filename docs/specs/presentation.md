@@ -4,9 +4,10 @@ The HUD is kept **minimal and mobile-friendly** — no debug/status text on the
 play screen (it lives on the pause menu instead, see below).
 
 - **Top-left:** a **☰ menu button**, and just below it a **player avatar frame**
-  (a WoW-style unit frame): the dot's **portrait**, a **HP bar** under it, and —
-  only while you hold a mana item — a blue **mana bar** under that. This is where
-  the character's **HP** lives (the level lives above the XP bar; see below).
+  (a WoW-style unit frame): the dot's **portrait**, a **HP bar** under it with the
+  **HP shown as a number** on the bar (e.g. `72/100`), and — only while you hold a
+  mana item — a blue **mana bar** under that. This is where the character's **HP**
+  lives (the level lives above the XP bar; see below).
 - **Top-right:** just `Stage N` (the dungeon depth, cyan) = how deep you are.
 - **Bottom-left:** clickable **sound icon** (speaker with waves / red-✕ when
   muted) — cycles master volume full → half → mute; next to it a **♪ music

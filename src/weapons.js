@@ -15,7 +15,7 @@
 // ============================================================================
 
 import { angleBetween } from './util.js';
-import { TILE, GAME } from './config.js';
+import { TILE, GAME, SWORD_SHIELD } from './config.js';
 
 export const WEAPONS = {
   // Default when a dot has no weapon: bare fists, 1 damage, short reach.
@@ -129,6 +129,30 @@ export const WEAPONS = {
     },
   },
 
+  // The Sword & Shield's sword: granted while the Shield is held (not in the swap
+  // cycle). Its normal swing CLEAVES every enemy in a wide frontal arc.
+  shield_sword: {
+    id: 'shield_sword',
+    name: 'Sword & Shield',
+    kind: 'melee',
+    range: SWORD_SHIELD.range,
+    cooldown: SWORD_SHIELD.cooldown,
+    damage: SWORD_SHIELD.damage,
+    defense: 0, // the shield's one-hit block is the defensive benefit, not this
+    specialCooldown: 2200,
+    color: 0xbfe3ff,
+    attack({ scene, owner, target }) {
+      const angle = angleBetween(owner.x, owner.y, target.x, target.y);
+      scene.meleeSweep(owner, angle, this.range, SWORD_SHIELD.halfArc, this.damage);
+      scene.swordSwingArc(owner, angle);
+    },
+    // A bigger, harder cleave in front.
+    special({ scene, owner, aimAngle }) {
+      scene.meleeSweep(owner, aimAngle, this.range + 12, Math.PI * 0.7, this.damage * 1.6);
+      scene.swordSwingArc(owner, aimAngle, 1.3);
+    },
+  },
+
   // --- Enemy weapons (not part of the player's swap cycle) --------------------
   claw: {
     id: 'claw',
@@ -142,6 +166,25 @@ export const WEAPONS = {
     attack({ scene, owner, target }) {
       scene.dealDamage(target, this.damage);
       owner.startSwing(angleBetween(owner.x, owner.y, target.x, target.y));
+    },
+  },
+
+  green_staff: {
+    id: 'green_staff',
+    name: 'Hex Staff',
+    kind: 'ranged',
+    range: 330, // lobs from well outside melee
+    cooldown: 1600, // ms between fireballs (the staff-tip orb charges over this)
+    damage: 4, // dodgeable ranged pressure
+    defense: 0,
+    projectileSpeed: 300,
+    projectileColor: 0x8dff5a, // green fireball (COLORS.fireball)
+    projectileTexture: 'fireball', // round orb instead of the arrow dash
+    color: 0x8dff5a,
+    attack({ scene, owner, target }) {
+      const angle = angleBetween(owner.x, owner.y, target.x, target.y);
+      // Spawn from the staff tip, not the body centre.
+      scene.spawnProjectile(owner, angle, this, { spawnDist: 28 });
     },
   },
 

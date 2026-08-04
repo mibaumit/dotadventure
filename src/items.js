@@ -104,8 +104,8 @@ export const ITEMS = {
     shape: 'shield', // custom pickup texture (baked in GameScene.buildTextures)
     color: 0xbfe3ff,
     kind: 'shield',
-    desc: 'Fully blocks one incoming hit, then recharges for a few seconds. Works alongside any weapon.',
-    // No `use` — grants a blocking off-hand on pickup.
+    desc: 'Sword & Shield: your melee attack becomes a wide sword swing that cleaves every enemy in front, and the shield fully blocks one hit (then recharges). A bow still shoots at range.',
+    // No `use` — grants the cleaving sword + blocking off-hand on pickup.
   },
 };
 

@@ -32,7 +32,7 @@ Current items:
 | **Bomb** | cooldown | black bomb + fuse | **Drops a timed bomb** where you stand; it pulses for **`BOMB.fuse` (2 s)** then **explodes** (AoE **`BOMB.damage`** within **`BOMB.radius`**, blast ring + boom). **`BOMB.cooldown` (3 s)** cooldown; **you can have several live at once**. **Rollable** — run into a dropped bomb to shove it like a bowling ball: it's a physics body with drag (`BOMB.drag`), a wall/bomb **bounce** (`BOMB.bounce`), and a speed cap (`BOMB.maxSpeed`); the harder you run in, the faster it rolls (`BOMB.push × your closing speed`), then it coasts to a stop. Not consumed. |
 | **Scroll of Frozen Orb** | mana | blue parchment scroll | Cast (howling-ice-storm sound) for an AoE **`FROST.damage`** within **`FROST.radius`**, plus a **chill** — hit enemies move at **`FROST.slowMultiplier` (50%)** for **`FROST.slowDuration` (2 s)** and tint frosty. Costs **mana** (`MANA.frostCost`) **+ a 2 s cooldown** (`FROST.cooldown`); does nothing if you can't afford it. |
 | **Bow** | weapon | cyan bow | Equips as the dot's weapon; fires arrows (see below). Found in a chest. |
-| **Shield** | shield | light-blue shield | Grants a blocking off-hand (see below). Found in a chest. |
+| **Shield** | shield | light-blue shield | Sword & Shield: a cleaving sword + a one-hit block (see below). Found in a chest. |
 
 Area items show an expanding **blast ring** (`blastEffect`).
 
@@ -56,12 +56,22 @@ they **carry across descents** and show on the dot.
   **string/hand draw & release** on each shot ("fffft" on loose, the usual
   impact sound on hit). Fires an arrow at the **clicked target enemy** on cooldown
   while it's in range and visible (reach ≈ line of sight); a foe closer than
-  `BOW.minRange` (90 px) is **punched with fists** instead.
-- **Shield** (`shield`) — **fully blocks one incoming hit**, then recharges over
-  `SHIELD.blockCooldown` (3 s) before it can block again. A block plays a
-  **"plomp"**, the on-dot shield arc **dims while recharging**, and a **blue
-  recharge bar** shows under the dot (like the bow's reload bar). Works alongside
-  any weapon (so bow + shield can combine).
+  `BOW.minRange` (90 px) is **punched with fists** instead. **Right-click** looses
+  a manual **aimed arrow straight at the mouse pointer** (respects the same
+  reload), independent of the left-click target.
+- **Shield → Sword & Shield** (`shield`) — picking it up arms **both** a sword and
+  a shield:
+  - **Sword:** your melee attack becomes a **wide cleaving swing** (`weapons.
+    shield_sword`, a `scene.meleeSweep` over `SWORD_SHIELD.halfArc` ≈ 162°) that
+    **hits every enemy in front at once**. Damage is **1 per enemy — same as the
+    Bow** (it makes up for it by cleaving). A steel arc sweeps on each swing; the
+    sword is held in the dot's **right hand (fistR)** and the shield on the **left
+    (fistL)**, both riding the arms as the dot moves.
+  - **Shield:** **fully blocks one incoming hit**, then recharges over
+    `SHIELD.blockCooldown` (3 s). A block plays a **"plomp"**, the shield arc
+    **dims while recharging**, and a **blue recharge bar** shows under the dot.
+  - With a **bow** equipped you still **shoot at range**; only point-blank (inside
+    `BOW.minRange`) do you **cleave** instead of punch.
 
 ## Projectiles ✅ (`entities/Projectile.js`)
 
@@ -91,6 +101,8 @@ Pixels scatter near the corpse, bob, and **magnet toward the dot** within
 - A player resource (`config.MANA.max`) spent by `mana`-kind items. Carries
   across descents. A **blue mana bar** appears **under the avatar's HP bar**
   (top-left) **only while you hold a mana item**, and refills from blue pixels.
+- **Passive regen:** mana slowly refills on its own at `MANA.regenPerSec` (3/s)
+  during un-frozen play, on top of blue-pixel refills.
 
 ## Sources of items ✅
 

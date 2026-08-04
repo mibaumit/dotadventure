@@ -24,6 +24,38 @@ export const SHAPES = {
     g.fillTriangle(size / 2, 0, size, size, 0, size);
   },
 
+  dart(g, size) {
+    // A thin needle: a long sharp tip up top and one very short base side at the
+    // bottom. Drawn pointing "up"; the sprite is rotated so the tip leads travel.
+    const half = size * 0.22; // half-width of the short base (keeps it slim)
+    g.fillTriangle(size / 2, 0, size / 2 + half, size, size / 2 - half, size);
+  },
+
+  x(g, size) {
+    // A bold saltire (diagonal cross) — two thick diagonal bars. Corners spill a
+    // hair outside the box and get clipped by generateTexture, giving flat arm-tips.
+    const o = (size * 0.26) / 2 / Math.SQRT2; // half-thickness, projected onto an axis
+    const s = size;
+    g.fillPoints(
+      [
+        { x: 0 + o, y: 0 - o },
+        { x: 0 - o, y: 0 + o },
+        { x: s - o, y: s + o },
+        { x: s + o, y: s - o },
+      ],
+      true
+    ); // "\" bar
+    g.fillPoints(
+      [
+        { x: 0 + o, y: s + o },
+        { x: 0 - o, y: s - o },
+        { x: s - o, y: 0 - o },
+        { x: s + o, y: 0 + o },
+      ],
+      true
+    ); // "/" bar
+  },
+
   diamond(g, size) {
     const h = size / 2;
     g.fillPoints(

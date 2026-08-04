@@ -20,10 +20,11 @@ export class Projectile extends Phaser.Physics.Arcade.Image {
    * @param {number} [opts.speed=300]  px/sec
    * @param {boolean} [opts.pierce=false]  keep going through enemies
    * @param {number} [opts.color=0xffffff]  tint
+   * @param {string} [opts.texture='arrow']  texture key ('arrow' dash, 'fireball' orb, …)
    * @param {number} [opts.lifespan]  ms before it fizzles (defaults to config)
    */
   constructor(scene, x, y, angle, opts = {}) {
-    super(scene, x, y, 'arrow');
+    super(scene, x, y, opts.texture ?? 'arrow');
     scene.add.existing(this);
     scene.physics.add.existing(this);
 

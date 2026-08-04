@@ -19,13 +19,18 @@ export class Enemy extends Phaser.Physics.Arcade.Sprite {
    * @param {string} [opts.shape='square']  visual silhouette (see shapes.js)
    * @param {number} [opts.color]           tint
    * @param {number} [opts.level=1]         character level → HP = level * hpPerLevel
+   * @param {boolean} [opts.hasFists=true]  give it the two side-fists (melee punch)
+   * @param {boolean} [opts.showEyes=true]  draw the little face (some shapes read better bare)
    */
-  constructor(scene, x, y, { shape = 'square', color = COLORS.enemyMelee, level = 1 } = {}) {
+  constructor(scene, x, y, { shape = 'square', color = COLORS.enemyMelee, level = 1, hasFists = true, showEyes = true } = {}) {
     super(scene, x, y, shapeTextureKey(shape));
     scene.add.existing(this);
     scene.physics.add.existing(this);
 
     this.shape = shape;
+    this.kind = 'melee'; // AI flavour; subclasses (e.g. EnemyDart) override
+    this.hasFists = hasFists;
+    this.showEyes = showEyes;
     this.faction = 'enemy';
     this.level = level;
     this.maxHp = level * ENEMY.hpPerLevel;
@@ -57,9 +62,12 @@ export class Enemy extends Phaser.Physics.Arcade.Sprite {
     this.body.setSize(this.width * 0.95, this.height * 0.95, true);
 
     // Two little fist-dots on the enemy's sides, in a darker shade of its colour.
-    const fistColor = Phaser.Display.Color.IntegerToColor(color).darken(40).color;
-    this.fistL = scene.add.image(x, y, 'fist').setTint(fistColor).setDepth(0);
-    this.fistR = scene.add.image(x, y, 'fist').setTint(fistColor).setDepth(0);
+    // Fistless types (e.g. the ramming dart) skip these — they attack by contact.
+    if (hasFists) {
+      const fistColor = Phaser.Display.Color.IntegerToColor(color).darken(40).color;
+      this.fistL = scene.add.image(x, y, 'fist').setTint(fistColor).setDepth(0);
+      this.fistR = scene.add.image(x, y, 'fist').setTint(fistColor).setDepth(0);
+    }
 
     // Level number shown on the enemy's body (kept in sync by GameScene).
     this.label = scene.add

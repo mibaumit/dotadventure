@@ -52,3 +52,19 @@ a smooth, round reveal:
 - The **entire starting room** is revealed up front.
 - Fogged areas hide enemies (the fog layer draws above entities). The fog
   recomputes whenever the dot crosses a fog cell (smooth updates).
+
+## Training Room ✅ (sandbox)
+
+Launched from the **main menu** ("Training Room" button) instead of a normal run
+(`GameScene` started with `{ training: true }`). A place to try every enemy and
+item without the dungeon in the way:
+
+- **Open arena:** one big room, floor everywhere, walls only on the outer border
+  (`makeTrainingLevel`). The **whole map is revealed — no fog**.
+- **One of every enemy** (melee square, dart, caster), placed across the room.
+  **Killed enemies respawn** after `TRAINING.respawnMs` (5 s) at their spot, so
+  you can keep practising.
+- **A chest for every item** — a column of chests near the start, each **forced**
+  to hold one specific item (`chest.forcedItem`), so you can grab any loadout.
+- The player starts with a **generous 100 HP** so you can poke things without
+  dying instantly. A down-staircase in a corner still lets you leave.

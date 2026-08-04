@@ -8,14 +8,16 @@
 // this file is structured so those systems each become their own small method.
 // ============================================================================
 
-import { TILE, COLORS, UNIT, ENEMY, GAME, HOTBAR, BOW, BOMB, POTION, MANA, PIXEL, PROJECTILE, SHIELD, FROST, FISTS, ATTACK_COOLDOWN_MULT, LEVELUP } from '../config.js';
-import { generateLevel, WALL, roomCenterTile } from '../levelgen.js';
+import { TILE, COLORS, UNIT, ENEMY, DART, CASTER, GAME, HOTBAR, BOW, BOMB, POTION, MANA, PIXEL, PROJECTILE, SHIELD, SWORD_SHIELD, COMBAT, FROST, FISTS, TRAINING, ATTACK_COOLDOWN_MULT, LEVELUP } from '../config.js';
+import { generateLevel, WALL, FLOOR, roomCenterTile } from '../levelgen.js';
 import { makeShapeTexture, shapeTextureKey } from '../shapes.js';
 import { makeRng, randInt, dist, angleDelta, angleBetween, clamp, TAU, pick } from '../util.js';
 import { Enemy } from '../entities/Enemy.js';
+import { EnemyDart } from '../entities/EnemyDart.js';
+import { EnemyCaster } from '../entities/EnemyCaster.js';
 import { Projectile } from '../entities/Projectile.js';
 import { getWeapon } from '../weapons.js';
-import { getItem, itemPoolForDepth, ITEM_SHAPES } from '../items.js';
+import { getItem, itemPoolForDepth, ITEM_SHAPES, ITEM_IDS } from '../items.js';
 import {
   ensureStarted,
   playFootstep,
@@ -58,6 +60,7 @@ export class GameScene extends Phaser.Scene {
     this.carryHotbar = data?.hotbar ?? null; // action-bar items carried down
     this.foundItems = new Set(data?.foundItems ?? []); // items already looted this run
     this.lootedChests = new Set(data?.lootedChests ?? []); // depths whose chest is opened
+    this.training = data?.training ?? false; // open sandbox: one of every enemy + item
   }
 
   create() {
@@ -84,7 +87,7 @@ export class GameScene extends Phaser.Scene {
   /** Big "Stage N" title that fades out at the start of each level. */
   showLevelHeadline() {
     const label = this.add
-      .text(this.scale.width / 2, this.scale.height * 0.4, `Stage ${this.depth}`, {
+      .text(this.scale.width / 2, this.scale.height * 0.4, this.training ? 'Training Room' : `Stage ${this.depth}`, {
         fontFamily: 'monospace',
         fontSize: '52px',
         color: '#3ad0ff',
@@ -113,6 +116,8 @@ export class GameScene extends Phaser.Scene {
     const size = UNIT.radius * 2; // enemies match the dot's footprint
     makeShapeTexture(this, 'dot', 'circle', size);
     makeShapeTexture(this, shapeTextureKey('square'), 'square', size);
+    makeShapeTexture(this, shapeTextureKey('dart'), 'dart', size); // ramming needle
+    makeShapeTexture(this, shapeTextureKey('x'), 'x', size); // caster's green X
     makeShapeTexture(this, 'fist', 'circle', Math.round(UNIT.radius * 0.8)); // little punch
 
     // Scroll of Frozen Orb: parchment scroll with a blue orb (multi-colour, so
@@ -206,6 +211,7 @@ export class GameScene extends Phaser.Scene {
       ag.generateTexture('arrow', 12, 3);
       ag.destroy();
     }
+    makeShapeTexture(this, 'fireball', 'circle', 12); // caster's round orb (tinted green)
     // Treasure chest.
     if (!this.textures.exists('chest')) {
       const cg = this.make.graphics({ x: 0, y: 0, add: false });
@@ -222,12 +228,14 @@ export class GameScene extends Phaser.Scene {
 
   /** Generate the dungeon and render floor + collidable walls. */
   buildLevel() {
-    this.level = generateLevel({
-      width: GAME.tilesW,
-      height: GAME.tilesH,
-      depth: this.depth,
-      seed: this.seed,
-    });
+    this.level = this.training
+      ? this.makeTrainingLevel(GAME.tilesW, GAME.tilesH)
+      : generateLevel({
+          width: GAME.tilesW,
+          height: GAME.tilesH,
+          depth: this.depth,
+          seed: this.seed,
+        });
 
     this.worldW = this.level.width * TILE;
     this.worldH = this.level.height * TILE;
@@ -255,6 +263,28 @@ export class GameScene extends Phaser.Scene {
 
     // Keep the world bounded to the dungeon.
     this.physics.world.setBounds(0, 0, this.worldW, this.worldH);
+  }
+
+  /**
+   * The training arena: one big open room (floor everywhere, walls only on the
+   * outer border), matching generateLevel's shape. Start is on the left, the exit
+   * staircase tucked in a corner. Enemies and chests are placed by the training
+   * spawners; the whole map is revealed (no fog).
+   */
+  makeTrainingLevel(width, height) {
+    const grid = [];
+    for (let y = 0; y < height; y++) {
+      const row = [];
+      for (let x = 0; x < width; x++) {
+        const border = x === 0 || y === 0 || x === width - 1 || y === height - 1;
+        row.push(border ? WALL : FLOOR);
+      }
+      grid.push(row);
+    }
+    const rooms = [{ x: 1, y: 1, w: width - 2, h: height - 2 }];
+    const start = { tx: Math.floor(width * 0.18), ty: Math.floor(height / 2) };
+    const exit = { tx: width - 3, ty: 2 };
+    return { grid, width, height, rooms, start, exit };
   }
 
   /**
@@ -314,6 +344,12 @@ export class GameScene extends Phaser.Scene {
       this.player.mana = c.mana ?? this.player.maxMana;
       this.player.weapon = getWeapon(c.weaponId);
       this.player.hasShield = c.hasShield ?? false;
+    }
+
+    // Training sandbox: enough HP to poke every enemy without dying instantly.
+    if (this.training) {
+      this.player.maxHp = 100;
+      this.player.hp = 100;
     }
 
     // Two little fist-dots that ride on the character's sides (darker shade).
@@ -404,6 +440,15 @@ export class GameScene extends Phaser.Scene {
     // body in its constructor. Using a *physics* group here zeroes a child's
     // velocity on add() — which left arrows spawned-but-stationary.
     this.projectiles = this.add.group();
+
+    // Training arena: exactly one of every enemy type, then the usual colliders.
+    if (this.training) {
+      this.spawnTrainingEnemies();
+      this.physics.add.collider(this.enemies, this.walls);
+      this.physics.add.collider(this.player, this.enemies);
+      return;
+    }
+
     const rng = makeRng(this.seed + this.depth * 7919);
 
     // Keep a buffer around BOTH staircases so nothing can aggro the player the
@@ -429,9 +474,21 @@ export class GameScene extends Phaser.Scene {
         if (dist(px, py, exitX, exitY) < safeRadius) continue; // too near the down-stairs
 
         const level = randInt(rng, 1, this.depth); // tougher enemies deeper down
-        const enemy = new Enemy(this, px, py, { shape: 'square', level });
-        enemy.patrol = this.roomPatrolPath(room); // walk the room's walls while idle
-        enemy.patrolIdx = 0;
+        const roll = rng(); // one roll partitions the enemy type
+        let enemy;
+        if (roll < DART.spawnChance) {
+          // A dart wanders in serpentine arcs (no room-wall patrol path needed).
+          enemy = new EnemyDart(this, px, py, { level });
+        } else if (roll < DART.spawnChance + CASTER.spawnChance) {
+          // A caster ambles its room while idle, then plants and lobs fireballs.
+          enemy = new EnemyCaster(this, px, py, { level });
+          enemy.patrol = this.roomPatrolPath(room);
+          enemy.patrolIdx = 0;
+        } else {
+          enemy = new Enemy(this, px, py, { shape: 'square', level });
+          enemy.patrol = this.roomPatrolPath(room); // walk the room's walls while idle
+          enemy.patrolIdx = 0;
+        }
         this.enemies.add(enemy);
       }
     }
@@ -442,6 +499,37 @@ export class GameScene extends Phaser.Scene {
     // free to overlap / pass through. (They still collide with walls and the
     // player.) This deliberately avoids any separation push, which is what used
     // to make packs jostle, stick, or deadlock.
+  }
+
+  /**
+   * Training arena: one of every enemy type, spread across the right half of the
+   * room so you can walk up and test each. Non-dart types get a patrol path so
+   * they amble like normal until they spot you.
+   */
+  spawnTrainingEnemies() {
+    const ty = Math.floor(GAME.tilesH / 2);
+    const makers = [
+      (x, y) => new Enemy(this, x, y, { shape: 'square', level: 1 }),
+      (x, y) => new EnemyDart(this, x, y, { level: 1 }),
+      (x, y) => new EnemyCaster(this, x, y, { level: 1 }),
+    ];
+    makers.forEach((make, i) => {
+      const x = (Math.floor(GAME.tilesW * 0.5) + i * 5 + 0.5) * TILE;
+      const y = (ty + 0.5) * TILE;
+      this.spawnTrainingEnemy(make, x, y);
+    });
+  }
+
+  /** Spawn one training enemy at (x,y), tagged so it can respawn on death. */
+  spawnTrainingEnemy(make, x, y) {
+    const e = make(x, y);
+    e.trainingSpawn = { make, x, y }; // remembered for the timed respawn
+    if (e.kind !== 'dart') {
+      e.patrol = this.roomPatrolPath(this.level.rooms[0]);
+      e.patrolIdx = 0;
+    }
+    this.enemies.add(e);
+    return e;
   }
 
   /**
@@ -456,6 +544,12 @@ export class GameScene extends Phaser.Scene {
     // Resource pixels (red = HP for the potion, blue = mana) dropped by kills.
     this.pixels = this.physics.add.group();
     this.physics.add.overlap(this.player, this.pixels, (_p, px) => this.collectPixel(px));
+
+    // Training arena: a column of chests, one holding each item in the game.
+    if (this.training) {
+      this.spawnTrainingChests();
+      return;
+    }
 
     // A chest opened on a previous visit stays looted — don't respawn it when
     // the player climbs back down to this depth (enemies do respawn; chests don't).
@@ -476,17 +570,41 @@ export class GameScene extends Phaser.Scene {
     chest.setImmovable(true);
     chest.opened = false;
     this.chest = chest;
-    this.physics.add.overlap(this.player, chest, () => this.openChest());
+    this.physics.add.overlap(this.player, chest, () => this.openChest(chest));
   }
 
-  /** Open the chest on touch: pop its items out as pickups the player grabs. */
-  openChest() {
-    const chest = this.chest;
+  /**
+   * Training arena: one chest per item, in a column near the player's start, each
+   * forced to hold its specific item (see openChest's forcedItem path).
+   */
+  spawnTrainingChests() {
+    const tx = Math.floor(GAME.tilesW * 0.32);
+    const ty0 = Math.floor(GAME.tilesH / 2) - ITEM_IDS.length; // centre the column
+    ITEM_IDS.forEach((id, i) => {
+      const chest = this.physics.add
+        .sprite((tx + 0.5) * TILE, (ty0 + i * 2 + 0.5) * TILE, 'chest')
+        .setDepth(0);
+      chest.setImmovable(true);
+      chest.opened = false;
+      chest.forcedItem = id; // this chest always gives exactly this item
+      this.physics.add.overlap(this.player, chest, () => this.openChest(chest));
+    });
+  }
+
+  /** Open a chest on touch: pop its item(s) out as pickups the player grabs. */
+  openChest(chest) {
+    chest = chest || this.chest;
     if (!chest || chest.opened) return;
     chest.opened = true;
-    this.lootedChests.add(this.depth); // never respawn this chest on a return visit
     chest.setTint(0x6b7280); // greyed = looted
 
+    // A training chest always yields its assigned item (no pool/looted tracking).
+    if (chest.forcedItem) {
+      this.createPickup(chest.x, chest.y - 6, chest.forcedItem);
+      return;
+    }
+
+    this.lootedChests.add(this.depth); // never respawn this chest on a return visit
     // One item, from this depth's pool minus anything already picked up this run
     // (every item is unique across chests). Empty if the pool is exhausted. Uses
     // Math.random so loot is genuinely random per run, not tied to the level seed.
@@ -756,6 +874,10 @@ export class GameScene extends Phaser.Scene {
       if (slot >= 0 && this.hotbar[slot]) return void this.useHotbarSlot(slot);
 
       if (this.player.dead) return;
+
+      // Right-click with the bow: loose an arrow straight at the mouse pointer
+      // (a manual aimed shot, distinct from the left-click auto-attack).
+      if (pointer.rightButtonDown()) return void this.fireBowAt(pointer.worldX, pointer.worldY);
       if (!pointer.leftButtonDown()) return;
 
       const enemy = this.enemyAt(pointer.worldX, pointer.worldY);
@@ -853,6 +975,22 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
+  /**
+   * Fire a bow arrow toward a world point (right-click aimed shot). Only works
+   * with the bow equipped and respects its reload (attackTimer/cooldown).
+   */
+  fireBowAt(wx, wy) {
+    const p = this.player;
+    if (p.weapon.id !== 'bow' || p.attackTimer > 0) return; // no bow, or still reloading
+    const angle = angleBetween(p.x, p.y, wx, wy);
+    p.facing = angle;
+    p.weapon.attack({ scene: this, owner: p, target: { x: wx, y: wy } });
+    p.attackTimer = p.weapon.cooldown * ATTACK_COOLDOWN_MULT;
+    p.attackCooldownMax = p.attackTimer;
+    p.bowDraw = 1; // play the string/hand release animation
+    p.usingBow = true;
+  }
+
   /** Nearest active enemy to a world point, within a small click radius, or null. */
   enemyAt(x, y) {
     let best = null;
@@ -879,6 +1017,19 @@ export class GameScene extends Phaser.Scene {
 
     // Top-left player avatar (portrait + HP/mana bars) — see drawAvatar.
     this.avatarFx = this.add.graphics().setScrollFactor(0).setDepth(100);
+    // HP shown as a number, centred on the avatar's HP bar (graphics can't draw text).
+    this.avatarHpText = this.add
+      .text(0, 0, '', {
+        fontFamily: 'monospace',
+        fontSize: '10px',
+        color: '#ffffff',
+        fontStyle: 'bold',
+        stroke: '#0d1019',
+        strokeThickness: 2,
+      })
+      .setScrollFactor(0)
+      .setDepth(101)
+      .setOrigin(0.5, 0.5);
   }
 
   /** Draw the top-left ☰ menu button (opens the pause menu) + its tap area. */
@@ -937,16 +1088,20 @@ export class GameScene extends Phaser.Scene {
     g.fillStyle(pct > 0.3 ? COLORS.hpGood : COLORS.hpLow, 1);
     g.fillRect(x, hbY, size * pct, hbH);
 
-    // Anchor for the mana bar, which stacks directly beneath the HP bar. (The
-    // bars read by colour/fill; exact HP/MP numbers live on the pause screen.)
+    // HP as a number, centred on the bar (e.g. "72/100").
+    this.avatarHpText.setText(`${Math.ceil(p.hp)}/${p.maxHp}`).setPosition(x + size / 2, hbY + hbH / 2);
+
+    // Anchor for the mana bar, which stacks directly beneath the HP bar.
     this.avatarBox = { x, w: size, manaY: hbY + hbH + 3 };
   }
 
   /** Status + controls lines shown on the pause screen (see PauseScene). */
   hudLines() {
     const p = this.player;
-    let weapon = p.weapon.name;
-    if (p.hasShield) weapon += p.shieldTimer <= 0 ? ' + Shield' : ' + Shield (recharging)';
+    // With the Shield, melee becomes the cleaving Sword & Shield (a bow keeps its
+    // name — it still shoots at range and only cleaves point-blank).
+    let weapon = p.hasShield && p.weapon.id !== 'bow' ? 'Sword & Shield' : p.weapon.name;
+    if (p.hasShield) weapon += p.shieldTimer <= 0 ? ' (shield ready)' : ' (shield recharging)';
     return [
       `Depth ${this.depth}    HP ${Math.ceil(p.hp)}/${p.maxHp}    Enemies ${this.enemies.countActive(true)}`,
       `Weapon: ${weapon}`,
@@ -971,8 +1126,23 @@ export class GameScene extends Phaser.Scene {
     this.fog = this.add.graphics().setDepth(60);
     this.lastFogCX = -999;
     this.lastFogCY = -999;
+    if (this.training) {
+      this.revealEntireMap(); // sandbox: no fog, everything on show
+      return;
+    }
     this.markStartRoomExplored(); // the whole first room is revealed up front
     this.recomputeFog();
+  }
+
+  /** Training: mark every cell explored + visible and clear the fog overlay. */
+  revealEntireMap() {
+    for (let cy = 0; cy < this.fogH; cy++) {
+      for (let cx = 0; cx < this.fogW; cx++) {
+        this.explored[cy][cx] = true;
+        this.visibleCells.add(cy * this.fogW + cx);
+      }
+    }
+    this.fog.clear();
   }
 
   /** Mark every fog cell inside the starting room as explored. */
@@ -1329,6 +1499,10 @@ export class GameScene extends Phaser.Scene {
     // When frozen, the simulation halts but order-input (clicks) stays live.
     if (!this.frozen && !this.player.dead) {
       this.gameTime += delta; // timer only advances during un-frozen play
+      // Slow passive mana regen (the bar only shows once a mana item is held).
+      if (this.player.mana < this.player.maxMana) {
+        this.player.mana = Math.min(this.player.maxMana, this.player.mana + (MANA.regenPerSec * delta) / 1000);
+      }
       if (this.player.shieldTimer > 0) this.player.shieldTimer -= delta;
       if (this.player.bowDraw > 0) this.player.bowDraw = Math.max(0, this.player.bowDraw - delta / BOW.drawTime);
       this.tickHotbarCooldowns(delta);
@@ -1346,17 +1520,20 @@ export class GameScene extends Phaser.Scene {
       // Enemies ignore each other entirely — no separation/collision, so they
       // just overlap and pass through instead of pushing or sticking.
       for (const e of this.enemies.getChildren()) {
-        if (e.active) this.updateFistsFor(e, time, ENEMY.radius);
+        if (e.active && e.hasFists) this.updateFistsFor(e, time, ENEMY.radius);
       }
     }
 
     // Fog of war: re-reveal when the dot crosses a fog cell (smooth updates).
-    const fcx = Math.floor(this.player.x / this.fogCell);
-    const fcy = Math.floor(this.player.y / this.fogCell);
-    if (fcx !== this.lastFogCX || fcy !== this.lastFogCY) {
-      this.lastFogCX = fcx;
-      this.lastFogCY = fcy;
-      this.recomputeFog();
+    // The training arena is fully revealed once, so it skips this entirely.
+    if (!this.training) {
+      const fcx = Math.floor(this.player.x / this.fogCell);
+      const fcy = Math.floor(this.player.y / this.fogCell);
+      if (fcx !== this.lastFogCX || fcy !== this.lastFogCY) {
+        this.lastFogCX = fcx;
+        this.lastFogCY = fcy;
+        this.recomputeFog();
+      }
     }
 
     this.drawSightCones();
@@ -1676,6 +1853,14 @@ export class GameScene extends Phaser.Scene {
     this.ensureFlowField(); // refresh the chase gradient if the player changed tiles
     for (const e of this.enemies.getChildren()) {
       if (!e.active) continue;
+      if (e.kind === 'dart') {
+        this.updateDart(e, delta);
+        continue;
+      }
+      if (e.kind === 'caster') {
+        this.updateCaster(e, delta);
+        continue;
+      }
       if (e.attackTimer > 0) e.attackTimer -= delta;
       if (e.slowTimer > 0) {
         e.slowTimer -= delta;
@@ -1754,6 +1939,258 @@ export class GameScene extends Phaser.Scene {
         e.attackTarget = null; // fists ride on the sides while chasing
       }
     }
+  }
+
+  /**
+   * Dart AI: a small state machine (patrol → approach → windup → charge →
+   * recover). A dart only ever moves along its tip, so every phase sets `facing`
+   * and then the sprite is rotated to match. See EnemyDart for the state fields.
+   */
+  updateDart(e, delta) {
+    const p = this.player;
+    const dt = delta / 1000;
+
+    // Frozen-Orb chill still slows a dart (and its tint reverts when it wears off).
+    if (e.slowTimer > 0) {
+      e.slowTimer -= delta;
+      if (e.slowTimer <= 0) e.setTint(e.baseColor);
+    }
+    const slow = e.slowTimer > 0 ? e.slowMult : 1;
+
+    // Growl once each time it wakes up (matches the melee enemies' aggro cue).
+    if (e.alerted && !e.announcedAggro) {
+      playAggro();
+      e.announcedAggro = true;
+    } else if (!e.alerted) {
+      e.announcedAggro = false;
+    }
+
+    if (p.dead) {
+      e.setVelocity(0, 0);
+      e.setRotation(e.facing + Math.PI / 2);
+      return;
+    }
+
+    const d = dist(e.x, e.y, p.x, p.y);
+
+    // Tip contact: the dart's sharp point hitting the player deals DART.contactDamage,
+    // at most once per DART.contactCooldown (so a parked dart chips, not drains).
+    // Measured from the TIP (front of the sprite) so a connecting charge always lands.
+    if (e.contactTimer > 0) e.contactTimer -= delta;
+    const tipX = e.x + Math.cos(e.facing) * ENEMY.radius;
+    const tipY = e.y + Math.sin(e.facing) * ENEMY.radius;
+    if (e.contactTimer <= 0 && dist(tipX, tipY, p.x, p.y) <= UNIT.radius + 5) {
+      p.takeDamage(DART.contactDamage);
+      e.contactTimer = DART.contactCooldown;
+    }
+
+    // Acquire the player by sight; lose them past aggro range (but never bail
+    // mid-charge — a launched dart always commits to its dash).
+    if (!e.alerted) {
+      if (this.enemyCanSee(e, p, d)) {
+        e.alerted = true;
+        e.dartPhase = 'approach';
+      }
+    } else if (d > ENEMY.aggroRange && e.dartPhase !== 'charge') {
+      e.alerted = false;
+      e.dartPhase = 'patrol';
+    }
+
+    switch (e.dartPhase) {
+      case 'approach':
+        this.dartApproach(e, dt, slow, d);
+        break;
+      case 'windup':
+        this.dartWindup(e, delta, p);
+        break;
+      case 'charge':
+        this.dartCharge(e, delta, slow);
+        break;
+      case 'recover':
+        this.dartRecover(e, delta);
+        break;
+      default:
+        this.dartPatrol(e, dt, slow);
+    }
+
+    e.setRotation(e.facing + Math.PI / 2); // texture points "up"; aim the tip at `facing`
+  }
+
+  /** Pick a fresh half-circle: flip the curl direction and choose a new radius. */
+  dartNewArc(e) {
+    e.arcDir *= -1;
+    e.arcRadius = DART.arcRadiusMin + Math.random() * (DART.arcRadiusMax - DART.arcRadiusMin);
+    e.arcSwept = 0;
+  }
+
+  /** Is a wall within `look` px straight ahead of the dart's tip? */
+  dartBlockedAhead(e, look) {
+    const tx = Math.floor((e.x + Math.cos(e.facing) * look) / TILE);
+    const ty = Math.floor((e.y + Math.sin(e.facing) * look) / TILE);
+    const row = this.level.grid[ty];
+    return !row || row[tx] === WALL;
+  }
+
+  /**
+   * Patrol: glide forward while steering along a circle of `arcRadius`. After a
+   * full half-circle (π of turning) flip the curl and resize, so the path weaves
+   * as a chain of alternating half-circles. Curl away early if a wall looms.
+   */
+  dartPatrol(e, dt, slow) {
+    const v = DART.patrolSpeed * slow;
+
+    if (this.dartBlockedAhead(e, ENEMY.radius + 16)) {
+      e.facing += 0.28 * e.arcDir; // keep curling until the path ahead opens up
+      e.setVelocity(Math.cos(e.facing) * v * 0.35, Math.sin(e.facing) * v * 0.35);
+      return;
+    }
+
+    const omega = (v / e.arcRadius) * e.arcDir; // angular speed to trace the arc
+    e.facing += omega * dt;
+    e.arcSwept += Math.abs(omega) * dt;
+    if (e.arcSwept >= Math.PI) this.dartNewArc(e); // finished a half-circle
+
+    e.setVelocity(Math.cos(e.facing) * v, Math.sin(e.facing) * v);
+  }
+
+  /** Approach: run in, re-aiming the tip at the player; wind up once close. */
+  dartApproach(e, dt, slow, d) {
+    const toP = angleBetween(e.x, e.y, this.player.x, this.player.y);
+    e.facing = this.turnToward(e.facing, toP, DART.turnRate * dt);
+    const v = DART.approachSpeed * slow;
+    e.setVelocity(Math.cos(e.facing) * v, Math.sin(e.facing) * v);
+    if (d <= DART.contactRange) {
+      e.dartPhase = 'windup';
+      e.dartTimer = DART.windup;
+      e.setVelocity(0, 0);
+    }
+  }
+
+  /** Windup: freeze, tip trained on the player; then lock the charge & launch. */
+  dartWindup(e, delta, p) {
+    e.setVelocity(0, 0);
+    e.facing = angleBetween(e.x, e.y, p.x, p.y); // keep aiming while telegraphing
+    e.dartTimer -= delta;
+    if (e.dartTimer <= 0) {
+      const a = angleBetween(e.x, e.y, p.x, p.y); // lock onto where the player is NOW
+      e.facing = a;
+      e.chargeVX = Math.cos(a);
+      e.chargeVY = Math.sin(a);
+      e.dartPhase = 'charge';
+      e.dartTimer = DART.chargeDuration;
+      playArrow(); // a launch swoosh
+    }
+  }
+
+  /** Charge: dash straight along the locked vector; ram on contact, end on wall/time. */
+  dartCharge(e, delta, slow) {
+    const v = DART.chargeSpeed * slow;
+    e.facing = Math.atan2(e.chargeVY, e.chargeVX);
+    e.setVelocity(e.chargeVX * v, e.chargeVY * v);
+    e.dartTimer -= delta;
+    // Damage is handled by the shared contact check in updateDart; the charge
+    // just ends on a wall or when its time runs out.
+    if (e.dartTimer <= 0 || this.dartBlockedAhead(e, ENEMY.radius + 4)) this.dartEndCharge(e);
+  }
+
+  /** End a charge → brief recovery before the next run-in. */
+  dartEndCharge(e) {
+    e.setVelocity(0, 0);
+    e.dartPhase = 'recover';
+    e.dartTimer = DART.recover;
+  }
+
+  /** Recover: a short pause, then run in again (or wander if the player is gone). */
+  dartRecover(e, delta) {
+    e.setVelocity(0, 0);
+    e.dartTimer -= delta;
+    if (e.dartTimer <= 0) e.dartPhase = e.alerted ? 'approach' : 'patrol';
+  }
+
+  /**
+   * Caster AI: a very slow ranged hexer. It ambles its room until it sees the
+   * player, then holds ground and lobs fireballs from its staff — the tip orb
+   * charges over the weapon's cooldown (`castCharge`). It only moves (slowly) to
+   * regain range or line of sight, and never melees / never flees.
+   */
+  updateCaster(e, delta) {
+    const p = this.player;
+    if (e.attackTimer > 0) e.attackTimer -= delta;
+    if (e.slowTimer > 0) {
+      e.slowTimer -= delta;
+      if (e.slowTimer <= 0) e.setTint(e.baseColor);
+    }
+    const slow = e.slowTimer > 0 ? e.slowMult : 1;
+
+    if (e.alerted && !e.announcedAggro) {
+      playAggro();
+      e.announcedAggro = true;
+    } else if (!e.alerted) {
+      e.announcedAggro = false;
+    }
+
+    if (p.dead) {
+      e.setVelocity(0, 0);
+      e.castCharge = 0;
+      return;
+    }
+
+    const d = dist(e.x, e.y, p.x, p.y);
+
+    if (!e.alerted) {
+      if (this.enemyCanSee(e, p, d)) {
+        e.alerted = true;
+      } else {
+        this.patrolEnemy(e, delta); // slow amble around the room's walls
+        e.castCharge = 0;
+        return;
+      }
+    }
+
+    if (d > ENEMY.aggroRange) {
+      e.alerted = false;
+      e.setVelocity(0, 0);
+      e.castCharge = 0;
+      return;
+    }
+
+    e.facing = angleBetween(e.x, e.y, p.x, p.y); // always aim the staff at the player
+    const los = this.hasLineOfSight(e.x, e.y, p.x, p.y);
+
+    if (d <= e.weapon.range && los) {
+      // Plant and cast — holds ground even up close (too slow to kite).
+      e.setVelocity(0, 0);
+      const cd = e.weapon.cooldown * ATTACK_COOLDOWN_MULT;
+      e.castCharge = clamp(1 - e.attackTimer / cd, 0, 1); // orb glow ramps toward the shot
+      if (e.attackTimer <= 0) {
+        e.weapon.attack({ scene: this, owner: e, target: p });
+        e.attackTimer = cd;
+        e.castCharge = 0;
+      }
+    } else {
+      // Out of range / no line of sight: shuffle slowly toward the player.
+      e.castCharge = 0;
+      const sp = e.speed * slow;
+      let dx;
+      let dy;
+      if (los) {
+        dx = Math.cos(e.facing);
+        dy = Math.sin(e.facing);
+      } else {
+        const step = this.flowStep(e);
+        dx = step ? step.x : Math.cos(e.facing);
+        dy = step ? step.y : Math.sin(e.facing);
+      }
+      const len = Math.hypot(dx, dy) || 1;
+      e.setVelocity((dx / len) * sp, (dy / len) * sp);
+    }
+  }
+
+  /** Rotate `cur` toward `target` by at most `maxStep` radians (shortest way). */
+  turnToward(cur, target, maxStep) {
+    const diff = angleDelta(cur, target);
+    if (Math.abs(diff) <= maxStep) return target;
+    return cur + Math.sign(diff) * maxStep;
   }
 
   /**
@@ -1893,7 +2330,8 @@ export class GameScene extends Phaser.Scene {
     for (const e of this.enemies.getChildren()) {
       if (!e.active) continue;
       this.drawHealthBar(e, ENEMY.radius);
-      this.drawFace(e, ENEMY.radius);
+      if (e.kind === 'caster') this.drawCasterStaff(e);
+      if (e.showEyes) this.drawFace(e, ENEMY.radius);
       if (e.slowTimer > 0 && e.slowMult <= 0.6) {
         // Thin blue ring marks a Frozen-Orb-chilled enemy (not brief fist jabs).
         this.fx.lineStyle(1.5, FROST.tint, 0.9);
@@ -1964,14 +2402,41 @@ export class GameScene extends Phaser.Scene {
     }
 
     if (p.hasShield) {
-      // A shield arc on the dot's left side; dims while recharging.
-      const side = f + Math.PI * 0.5;
-      const sx = p.x + Math.cos(side) * (UNIT.radius + 1);
-      const sy = p.y + Math.sin(side) * (UNIT.radius + 1);
       const ready = p.shieldTimer <= 0;
+      const side = f + Math.PI * 0.5;
+      const lh = p.fistL; // shield arm (left hand)
+      const rh = p.fistR; // sword arm (right hand)
+
+      // Arms: short limbs from the body out to each hand, so the gear reads as
+      // held ON an arm. Drawn first, under the hands/gear. They track the fists,
+      // so the shield and sword move with the arms as the dot bobs/guards.
+      g.lineStyle(3, COLORS.playerFist, 0.9);
+      g.beginPath();
+      g.moveTo(p.x + Math.cos(side) * (UNIT.radius - 4), p.y + Math.sin(side) * (UNIT.radius - 4));
+      g.lineTo(lh.x, lh.y);
+      g.moveTo(p.x - Math.cos(side) * (UNIT.radius - 4), p.y - Math.sin(side) * (UNIT.radius - 4));
+      g.lineTo(rh.x, rh.y);
+      g.strokePath();
+
+      // Shield strapped to the LEFT hand, facing outward; dims while recharging.
       g.lineStyle(3, 0xbfe3ff, ready ? 0.95 : 0.3);
       g.beginPath();
-      g.arc(sx, sy, 7, side - Math.PI * 0.6, side + Math.PI * 0.6);
+      g.arc(lh.x, lh.y, 7, side - Math.PI * 0.6, side + Math.PI * 0.6);
+      g.strokePath();
+
+      // Sword gripped in the RIGHT hand: hilt AT the hand, crossguard across it,
+      // blade extending forward. The full cleave plays on swing (swordSwingArc).
+      const tipx = rh.x + Math.cos(f) * (UNIT.radius + 12);
+      const tipy = rh.y + Math.sin(f) * (UNIT.radius + 12);
+      g.lineStyle(2.5, 0xeaf4ff, 0.95); // blade
+      g.beginPath();
+      g.moveTo(rh.x, rh.y);
+      g.lineTo(tipx, tipy);
+      g.strokePath();
+      g.lineStyle(2, 0x9fb4c8, 0.95); // crossguard across the hilt
+      g.beginPath();
+      g.moveTo(rh.x + Math.cos(side) * 3, rh.y + Math.sin(side) * 3);
+      g.lineTo(rh.x - Math.cos(side) * 3, rh.y - Math.sin(side) * 3);
       g.strokePath();
     }
   }
@@ -2030,6 +2495,45 @@ export class GameScene extends Phaser.Scene {
     label
       .setPosition(entity.x - Math.cos(f) * back, entity.y - Math.sin(f) * back)
       .setText(`${entity.level}`);
+  }
+
+  /**
+   * Draw the caster's staff: two hands gripping a shaft held out front toward the
+   * player, with a green orb at the tip that swells and brightens as the next
+   * fireball charges (`castCharge` 0→1). The fireball is spawned from this tip.
+   */
+  drawCasterStaff(e) {
+    const g = this.fx;
+    const f = e.facing ?? 0;
+    const cx = Math.cos(f);
+    const cy = Math.sin(f);
+    const grip = ENEMY.radius - 3; // shaft starts near the body
+    const tip = 28; // matches the fireball spawnDist in weapons.green_staff
+    const gx = e.x + cx * grip;
+    const gy = e.y + cy * grip;
+    const tx = e.x + cx * tip;
+    const ty = e.y + cy * tip;
+
+    // Shaft.
+    g.lineStyle(3, 0x6b4a2a, 0.95); // brown wood
+    g.beginPath();
+    g.moveTo(gx, gy);
+    g.lineTo(tx, ty);
+    g.strokePath();
+
+    // Two hands gripping along the shaft (dark green knuckles).
+    g.fillStyle(0x2f7a29, 1);
+    for (const along of [grip + 5, grip + 13]) {
+      g.fillCircle(e.x + cx * along, e.y + cy * along, 3);
+    }
+
+    // Charging orb at the tip: a soft halo + bright core, growing with castCharge.
+    const ch = e.castCharge ?? 0;
+    const r = 3 + ch * 3.5;
+    g.fillStyle(COLORS.fireball, 0.28 + 0.4 * ch);
+    g.fillCircle(tx, ty, r + 3); // halo
+    g.fillStyle(0xd9ffbf, 0.7 + 0.3 * ch);
+    g.fillCircle(tx, ty, r); // core
   }
 
   /** Draw two little dark eyes on `entity`, looking in its facing direction. */
@@ -2247,11 +2751,18 @@ export class GameScene extends Phaser.Scene {
       return;
     }
 
-    // Choose the weapon this frame: a bow that's point-blank on the target can't
-    // fire, so it punches instead.
+    // Choose the weapon this frame. With the Shield held, the melee attack is the
+    // cleaving Sword & Shield swing. A bow still fires at range; only when it's
+    // point-blank (can't fire) do we fall back to melee — the cleave if we hold a
+    // shield, otherwise bare fists.
     const dToTarget = dist(p.x, p.y, f.x, f.y);
+    const meleeId = p.hasShield ? 'shield_sword' : 'fists';
     let weapon = p.weapon;
-    if (p.weapon.id === 'bow' && dToTarget < BOW.minRange) weapon = getWeapon('fists');
+    if (p.weapon.id === 'bow') {
+      if (dToTarget < BOW.minRange) weapon = getWeapon(meleeId);
+    } else if (p.hasShield) {
+      weapon = getWeapon('shield_sword'); // Sword & Shield overrides bare/other melee
+    }
     const ranged = weapon.kind === 'ranged';
     p.usingBow = ranged;
 
@@ -2311,6 +2822,14 @@ export class GameScene extends Phaser.Scene {
         this.showDamageNumber(tx + 16, ty + 6, `+${target.level} XP`, '#ffcf5c');
         this.grantXp(target.level);
         this.dropPixels(tx, ty);
+        // Training arena: the same enemy returns after a delay so you can keep at it.
+        if (this.training && target.trainingSpawn) {
+          const { make, x, y } = target.trainingSpawn;
+          this.time.delayedCall(TRAINING.respawnMs, () => {
+            if (target.destroy) target.destroy(); // clear the corpse
+            this.spawnTrainingEnemy(make, x, y);
+          });
+        }
       }
     } else {
       this.flashHit(target);
@@ -2526,6 +3045,43 @@ export class GameScene extends Phaser.Scene {
   }
 
   /**
+   * A quick steel arc that sweeps across the frontal cleave — the visual for a
+   * Sword & Shield swing. A blade line rides the leading edge while a trailing
+   * arc fades behind it. One-shot graphics, tweened then destroyed.
+   */
+  swordSwingArc(owner, angle, scale = 1) {
+    if (owner === this.player) playPunch(); // reuse the melee-hit "thwump"
+    const range = (SWORD_SHIELD.range - 6) * scale;
+    const half = SWORD_SHIELD.halfArc;
+    const g = this.add.graphics().setDepth(3);
+    // Pivot at the sword hand (fistR) so the slash stays attached to it.
+    const hand = owner.fistR;
+    const ox = hand ? hand.x : owner.x;
+    const oy = hand ? hand.y : owner.y; // anchored at swing-time (swings are brief)
+    const state = { t: 0 };
+    this.tweens.add({
+      targets: state,
+      t: 1,
+      duration: COMBAT.swingDuration,
+      ease: 'Quad.easeOut',
+      onUpdate: () => {
+        const lead = angle - half + 2 * half * state.t; // blade sweeps edge→edge
+        const alpha = 1 - state.t * 0.7;
+        g.clear();
+        g.lineStyle(3, 0xeaf4ff, alpha);
+        g.beginPath();
+        g.arc(ox, oy, range, angle - half, lead); // trailing arc
+        g.strokePath();
+        g.beginPath();
+        g.moveTo(ox, oy);
+        g.lineTo(ox + Math.cos(lead) * range, oy + Math.sin(lead) * range); // blade
+        g.strokePath();
+      },
+      onComplete: () => g.destroy(),
+    });
+  }
+
+  /**
    * Fire a projectile (weapons.js calls this). Hits enemies if the player fired
    * it, the player if an enemy did. `opts.speedMult`/`damageMult`/`pierce` come
    * from a weapon's special shot.
@@ -2533,20 +3089,23 @@ export class GameScene extends Phaser.Scene {
   spawnProjectile(owner, angle, weapon, opts = {}) {
     const speed = (weapon.projectileSpeed ?? 300) * (opts.speedMult ?? 1);
     const damage = weapon.damage * (opts.damageMult ?? 1);
-    const color = owner.faction === 'player' ? COLORS.player : COLORS.enemyMelee;
-    const d0 = UNIT.radius + 6; // spawn just outside the shooter
+    // A weapon can define its own projectile look (e.g. the caster's green orb);
+    // otherwise it's tinted by faction (player cyan / enemy red).
+    const color = weapon.projectileColor ?? (owner.faction === 'player' ? COLORS.player : COLORS.enemyMelee);
+    const texture = weapon.projectileTexture ?? 'arrow';
+    const d0 = opts.spawnDist ?? UNIT.radius + 6; // spawn just outside the shooter (or at a staff tip)
     const proj = new Projectile(
       this,
       owner.x + Math.cos(angle) * d0,
       owner.y + Math.sin(angle) * d0,
       angle,
-      { faction: owner.faction, damage, pierce: !!opts.pierce, speed, color }
+      { faction: owner.faction, damage, pierce: !!opts.pierce, speed, color, texture }
     );
     this.projectiles.add(proj);
     // Set velocity AFTER adding so nothing can zero it — the arrow flies along
     // its aim vector toward the target.
     proj.body.setVelocity(Math.cos(angle) * speed, Math.sin(angle) * speed);
-    if (owner.faction === 'player') playArrow(); // "fffft"
+    if (owner.faction === 'player' || weapon.kind === 'ranged') playArrow(); // "fffft" whoosh
     return proj;
   }
 

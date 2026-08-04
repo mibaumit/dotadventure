@@ -146,9 +146,10 @@ export class StartScene extends Phaser.Scene {
 
   buildButtons() {
     this.playBtn = this.makeButton(240, 62, '▶  Play', 26, true, () => this.startGame());
+    this.trainingBtn = this.makeButton(240, 44, 'Training Room', 16, false, () => this.startGame(true));
     this.optionsBtn = this.makeButton(240, 46, 'Options', 18, false, () => this.toggleOptions(true));
     this.helpBtn = this.makeButton(240, 46, 'How to Play', 18, false, () => this.toggleHelp(true));
-    this.menuButtons = [this.playBtn, this.optionsBtn, this.helpBtn];
+    this.menuButtons = [this.playBtn, this.trainingBtn, this.optionsBtn, this.helpBtn];
     this.selectedIndex = -1;
     this.selectButton(0); // Play is highlighted by default
     this.setupMenuKeys();
@@ -459,9 +460,10 @@ export class StartScene extends Phaser.Scene {
     this.emblem.setPosition(cx, cy - 172);
     this.title.setPosition(cx, cy - 84);
     this.tagline.setPosition(cx, cy - 40);
-    this.playBtn.setPosition(cx, cy + 40);
-    this.optionsBtn.setPosition(cx, cy + 112);
-    this.helpBtn.setPosition(cx, cy + 176);
+    this.playBtn.setPosition(cx, cy + 34);
+    this.trainingBtn.setPosition(cx, cy + 88);
+    this.optionsBtn.setPosition(cx, cy + 140);
+    this.helpBtn.setPosition(cx, cy + 190);
     this.footer.setPosition(cx, height - 26);
 
     // Corner audio controls (bottom-left), redrawn for the current size.
@@ -478,8 +480,8 @@ export class StartScene extends Phaser.Scene {
     this.rebuildOptionsOverlay();
   }
 
-  /** Fade out and hand off to a fresh run. */
-  startGame() {
+  /** Fade out and hand off to a fresh run (or the training sandbox). */
+  startGame(training = false) {
     if (this.starting) return; // guard against double-clicks during the fade
     this.starting = true;
     ensureStarted();
@@ -487,7 +489,7 @@ export class StartScene extends Phaser.Scene {
     const seed = Math.floor(Math.random() * 0x7fffffff);
     this.cameras.main.fadeOut(300, 13, 16, 25);
     this.cameras.main.once('camerafadeoutcomplete', () => {
-      this.scene.start('GameScene', { depth: 1, seed });
+      this.scene.start('GameScene', { depth: 1, seed, training });
     });
   }
 
